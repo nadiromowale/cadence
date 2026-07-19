@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/cadence/static/css/main.c5c867cd.css",
+    "main.js": "/cadence/static/js/main.231756de.js",
+    "index.html": "/cadence/index.html",
+    "main.c5c867cd.css.map": "/cadence/static/css/main.c5c867cd.css.map",
+    "main.231756de.js.map": "/cadence/static/js/main.231756de.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.c5c867cd.css",
+    "static/js/main.231756de.js"
+  ]
+}
