@@ -442,6 +442,14 @@ function App() {
   const [density, setDensity] = useState(() => localStorage.getItem('planner-density') || 'balanced');
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState('roles'); // roles | display | clock | profile
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 640);
+  const [mobileDrawer, setMobileDrawer] = useState(null); // null | 'roles' | 'sessions' | 'themes'
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 640);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  useEffect(() => { if (!isMobile) setMobileDrawer(null); }, [isMobile]);
   const [clockCities, setClockCities] = useState(() => {
     try { const s = localStorage.getItem('planner-clocks'); if (s) return JSON.parse(s); } catch {}
     return [
@@ -1245,11 +1253,20 @@ function App() {
     setShowModal(true);
   }
 
+  const dragGrabOffsetY = useRef(0);
+
   function handleDragStart(e, task, occDate) {
     e.stopPropagation();
     e.dataTransfer.setData('text/plain', String(task.id));
     e.dataTransfer.effectAllowed = 'move';
     setDraggingOccDate(occDate || null);
+    // How far below the block's top edge the user grabbed. On drop we subtract this
+    // so the block's TOP lands where aimed, not the cursor (which sits mid-block and
+    // was pushing every drop ~a half-hour late).
+    try {
+      const r = e.currentTarget.getBoundingClientRect();
+      dragGrabOffsetY.current = e.clientY - r.top;
+    } catch { dragGrabOffsetY.current = 0; }
   }
 
   function addDays(dateStr, n) {
@@ -1971,10 +1988,16 @@ function App() {
     // The Sessions panel shows SESSIONS only — items with a scheduled time.
     // Themes (no time) live in the Themes panel, never here. All-day sessions count as sessions.
     if (taskColView === 'unscheduled') {
-      // explicit opt-in view: untimed, non-allday items (i.e. themes) — kept for flexibility
-      list = list.filter(t => !t.time && !t.allDay);
+      // Unscheduled SESSIONS only: no time, not all-day, not done — and NOT a theme.
+      // Themes (kind weekly/project/standing) have no time either, but they live in
+      // the Themes panel, never here. This is what was leaking themes into this view.
+      const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+      list = list.filter(t => !t.time && !t.allDay && !t.done && !isTheme(t));
     } else {
-      list = list.filter(t => (t.time || t.allDay) && sessionInViewedWeek(t));
+      // Active sessions only: scheduled, in the viewed week, and NOT done.
+      // A completed session is archived out of the active panel — it shouldn't sit
+      // in the working list (and must never read as "unscheduled").
+      list = list.filter(t => (t.time || t.allDay) && !t.done && sessionInViewedWeek(t));
     }
     return list;
   }
@@ -2209,7 +2232,7 @@ function App() {
           {armedRole ? '● Record-armed — click a spot in the armed lane to add a session there.' : 'Arm a track (R) then click its lane to add a session, or double-click any lane.'}
         </div>
       </div>
-      <div className="priority-section timeline-themes">
+      <div className={`priority-section timeline-themes${isMobile ? ' mobile-drawer-right' : ''}${isMobile && mobileDrawer==='themes' ? ' open' : ''}`}>
         <div className="priority-header">Today's Themes</div>
         <div className="priority-list">
           {(() => {
@@ -2352,9 +2375,17 @@ function App() {
       </div>
 
       {/* BODY ROW */}
-      <div className="body-row">
+      {isMobile && (
+        <div className="mobile-bar">
+          <button className={`mbar-btn${mobileDrawer==='roles'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='roles'?null:'roles')}>☰ Roles</button>
+          <button className={`mbar-btn${mobileDrawer==='sessions'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='sessions'?null:'sessions')}>Sessions</button>
+          <button className={`mbar-btn${mobileDrawer==='themes'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='themes'?null:'themes')}>Themes</button>
+        </div>
+      )}
+      <div className={`body-row${isMobile ? ' mobile' : ''}`}>
+      {isMobile && mobileDrawer && <div className="mobile-scrim" onClick={() => setMobileDrawer(null)} />}
       {/* SIDEBAR */}
-      <div className="sidebar">
+      <div className={`sidebar${isMobile ? ' mobile-drawer' : ''}${isMobile && mobileDrawer==='roles' ? ' open' : ''}`}>
         <div className="sidebar-top">
           <h2>Roles</h2>
           <button className="icon-btn settings-gear" onClick={() => { setSettingsTab('roles'); setShowSettings(true); }} title="Settings">⚙</button>
@@ -2403,7 +2434,7 @@ function App() {
       </div>
 
       {/* TASK COLUMN */}
-      <div className="task-column">
+      <div className={`task-column${isMobile ? ' mobile-drawer' : ''}${isMobile && mobileDrawer==='sessions' ? ' open' : ''}`}>
         {viewMode === 'timeline' ? (
           <>
             <div className="task-col-header">
@@ -2687,9 +2718,12 @@ function App() {
                           onDragOver={(e) => e.preventDefault()}
                           onDrop={(e) => {
                             const rect = e.currentTarget.getBoundingClientRect();
-                            const frac = rect.height > 0 ? (e.clientY - rect.top) / rect.height : 0;
-                            const snapped = Math.floor((hour * 60 + frac * 60) / gridSnap) * gridSnap;
-                            handleDrop(e, dateStr, hour, snapped);
+                            // Use the block's TOP (cursor minus where it was grabbed),
+                            // and snap to the NEAREST slot rather than always flooring.
+                            const y = (e.clientY - dragGrabOffsetY.current) - rect.top;
+                            const frac = rect.height > 0 ? y / rect.height : 0;
+                            const snapped = Math.max(0, Math.round((hour * 60 + frac * 60) / gridSnap) * gridSnap);
+                            handleDrop(e, dateStr, Math.floor(snapped/60), snapped);
                           }}></div>
                       ))}
                       {/* background band events (behind everything) */}
@@ -2797,7 +2831,7 @@ function App() {
             </div>
           </div>
 
-          <div className="priority-section">
+          <div className={`priority-section${isMobile ? ' mobile-drawer-right' : ''}${isMobile && mobileDrawer==='themes' ? ' open' : ''}`}>
             <div className="priority-header">
               <span>Themes</span>
               <select value={themesSort} onChange={e => setThemesSort(e.target.value)} className="view-select themes-sort">
@@ -3027,7 +3061,7 @@ function App() {
                 </div>
                 <div className="form-group">
                   <label>End Time</label>
-                  <TimeEntry value={formData.endTime} use24h={use24h} onChange={v => setFormData({...formData, endTime: v, duration: v ? '' : formData.duration})} />
+                  <TimeEntry value={formData.endTime} use24h={use24h} startTime={formData.time} onChange={v => setFormData({...formData, endTime: v, duration: v ? '' : formData.duration})} />
                 </div>
               </div>
               <div className="form-group"><label>Duration (minutes, alternative to end time)</label><input type="number" value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value, endTime: e.target.value ? '' : formData.endTime})} placeholder="e.g. 90"/></div>
@@ -4105,11 +4139,22 @@ function App() {
   );
 }
 
-function TimeEntry({ value, use24h, onChange }) {
+function TimeEntry({ value, use24h, onChange, startTime }) {
   const parts = splitTime(value, use24h);
   const update = (field, v) => {
     const next = { ...parts, [field]: v };
-    onChange(buildTime(next.hour, next.minute, next.ampm, use24h));
+    let built = buildTime(next.hour, next.minute, next.ampm, use24h);
+    // If this is an end time (startTime given), not 24h, and the user just set the
+    // hour/minute (not the AM/PM), and the built end lands before the start, assume
+    // they mean later the same day and flip to PM — the calendar-app convention.
+    if (built && startTime && !use24h && field !== 'ampm' && parts.ampm === 'AM') {
+      const toMin = s => { const [h,m] = s.split(':').map(Number); return h*60 + m; };
+      if (toMin(built) < toMin(startTime)) {
+        const pm = buildTime(next.hour, next.minute, 'PM', use24h);
+        if (toMin(pm) >= toMin(startTime)) built = pm;
+      }
+    }
+    onChange(built);
   };
   const clear = () => onChange('');
   return (

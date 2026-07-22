@@ -1054,3 +1054,62 @@ textarea { resize: vertical; }
 .hdr-export { position: relative; display: inline-flex; align-items: center; gap: 3px; font-weight: 700; }
 .hdr-import { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .hdr-export .stale-dot { position: static; margin-left: 1px; box-shadow: none; width: 6px; height: 6px; }
+
+/* ============================================================
+   PHASE 1 — MOBILE: make the desktop app survive a narrow screen.
+   Below 640px the three side panels become off-canvas drawers,
+   the calendar/timeline fills the screen, and a control bar
+   toggles each panel. No logic changes — pure layout.
+   ============================================================ */
+@media (max-width: 640px) {
+  /* Header: let it wrap and shrink so controls don't overflow */
+  .header { flex-wrap: wrap; gap: 8px; padding: 6px 10px; }
+  .brand h1 { font-size: 16px; }
+  .header-controls { flex-wrap: wrap; gap: 6px; }
+  .vegas-meter { display: none; } /* save space up top */
+
+  /* Mobile control bar under the header */
+  .mobile-bar { display: flex; gap: 6px; padding: 6px 10px; background: var(--chrome-3); border-bottom: 1px solid var(--chrome-line); flex-shrink: 0; }
+  .mbar-btn { flex: 1; font-family: var(--font-small); font-size: 12px; font-weight: 700; color: var(--rail-ink); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 8px 6px; cursor: pointer; }
+  .mbar-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* The body becomes a single column; the calendar/timeline fills it */
+  .body-row.mobile { position: relative; }
+  .content { padding: 8px; gap: 8px; }
+
+  /* Side panels → off-canvas drawers that slide in over the content */
+  .sidebar.mobile-drawer,
+  .task-column.mobile-drawer {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 200;
+    width: 82vw; max-width: 320px; margin: 0; border-radius: 0;
+    transform: translateX(-100%); transition: transform 0.22s ease;
+  }
+  .task-column.mobile-drawer { border: none; overflow-y: auto; }
+  .sidebar.mobile-drawer.open,
+  .task-column.mobile-drawer.open { transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,0.5); }
+
+  /* Themes drawer slides from the RIGHT (it lives on the right on desktop) */
+  .priority-section.mobile-drawer-right {
+    position: fixed; top: 0; bottom: 0; right: 0; z-index: 200;
+    width: 82vw; max-width: 320px; margin: 0; border-radius: 0;
+    transform: translateX(100%); transition: transform 0.22s ease;
+    overflow-y: auto;
+  }
+  .priority-section.mobile-drawer-right.open { transform: translateX(0); box-shadow: -4px 0 24px rgba(0,0,0,0.5); }
+
+  /* Dim scrim behind an open drawer */
+  .mobile-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 150; }
+
+  /* Calendar/timeline take the full width — the Themes panel is a drawer, not a
+     column, so content must NOT stack (that was collapsing the calendar height). */
+  .calendar-container { min-width: 0; }
+
+  /* The Timeline's inline "Today's Themes" panel is 190px and eats half a phone
+     screen. Hide it inline, but allow it to appear as a right-side drawer when the
+     mobile Themes button opens it. */
+  .timeline-themes:not(.mobile-drawer-right) { display: none; }
+  .timeline-view { padding-right: 0; }
+
+  /* Bigger tap targets in the calendar */
+  .event, .clip { min-height: 30px; }
+}
