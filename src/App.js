@@ -445,20 +445,25 @@ function App() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 640);
   const [mobileDrawer, setMobileDrawer] = useState(null); // null | 'roles' | 'sessions' | 'themes'
   // Phase 2: mobile bottom-tab navigation. 'browse' = Roles & Themes, 'score', 'timeline', 'ask'
-  const [mobileTab, setMobileTab] = useState('score');
   const [mobileMenu, setMobileMenu] = useState(false);
+  const mobileTlRef = useRef(null);
+  const mobileAgendaRef = useRef(null);
+  // On mobile, open the Score with TODAY at the top — past days scroll up out of the
+  // way rather than making you hunt for today. Only when viewing the current week.
+  useEffect(() => {
+    if (!isMobile || viewMode !== 'score') return;
+    const el = mobileAgendaRef.current;
+    if (!el) return;
+    const today = el.querySelector('[data-today="1"]');
+    if (today) el.scrollTop = today.offsetTop - el.offsetTop;
+    else el.scrollTop = 0; // different week — start at the top
+  }, [isMobile, viewMode, currentWeekStart, tasks.length]);
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth <= 640);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
   useEffect(() => { if (!isMobile) setMobileDrawer(null); }, [isMobile]);
-  // Mobile tabs drive the underlying view so Score/Timeline stay in sync with the tab bar.
-  useEffect(() => {
-    if (!isMobile) return;
-    if (mobileTab === 'score' && viewMode !== 'score') setViewMode('score');
-    if (mobileTab === 'timeline' && viewMode !== 'timeline') setViewMode('timeline');
-  }, [mobileTab, isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
   const [clockCities, setClockCities] = useState(() => {
     try { const s = localStorage.getItem('planner-clocks'); if (s) return JSON.parse(s); } catch {}
     return [
@@ -572,6 +577,14 @@ function App() {
   })();
   const [gridSnap, setGridSnap] = useState(() => parseInt(localStorage.getItem('planner-gridsnap'),10) || 30);
   const [timelineDay, setTimelineDay] = useState(fmtInput(new Date()));
+  // Mobile timeline opens at the configured START hour, matching desktop.
+  // NOTE: must live below timelineDay/dayStartHour — an effect's deps are evaluated
+  // during render, so referencing them earlier throws "cannot access before init".
+  useEffect(() => {
+    if (!isMobile || viewMode !== 'timeline') return;
+    const el = mobileTlRef.current;
+    if (el) el.scrollTop = dayStartHour * 64; // 64px per hour row
+  }, [isMobile, viewMode, timelineDay, dayStartHour]);
   const [mutedRoles, setMutedRoles] = useState([]);      // role ids hidden
   const [nowClock, setNowClock] = useState(new Date());
   useEffect(() => { const iv = setInterval(() => setNowClock(new Date()), 30000); return () => clearInterval(iv); }, []);
@@ -2018,7 +2031,7 @@ function App() {
     const todayStr = fmtInput(new Date());
     const days = Array.from({length:7}, (_,i) => { const d = new Date(currentWeekStart); d.setDate(d.getDate()+i); return fmtInput(d); });
     return (
-      <div className="m-agenda">
+      <div className="m-agenda" ref={mobileAgendaRef}>
         {days.map(dateStr => {
           const d = new Date(dateStr + 'T00:00:00');
           const isToday = dateStr === todayStr;
@@ -2030,7 +2043,7 @@ function App() {
             .sort((a,b) => (a.time||'').localeCompare(b.time||''));
           const count = claims.length + timed.length;
           return (
-            <div key={dateStr} className={`m-day${isToday ? ' m-day-today' : ''}`}>
+            <div key={dateStr} className={`m-day${isToday ? ' m-day-today' : ''}`} data-today={isToday ? '1' : undefined}>
               <div className="m-day-head">
                 <span className="m-day-dow">{d.toLocaleDateString('en-US',{weekday:'short'})}</span>
                 <span className="m-day-date">{d.toLocaleDateString('en-US',{month:'short', day:'numeric'})}</span>
@@ -2070,6 +2083,111 @@ function App() {
             </div>
           );
         })}
+      </div>
+    );
+  }
+
+  // PHASE 4 — Mobile Timeline: a single day as a VERTICAL hour grid. The desktop
+  // timeline is horizontal (roles as lanes, hours across), which doesn't fit a phone.
+  // Same data and overlap math, rotated to the phone's natural axis.
+  function renderMobileTimeline() {
+    const HOUR_H = 64;
+    const dateStr = timelineDay;
+    const d = new Date(dateStr + 'T00:00:00');
+    const isToday = dateStr === fmtInput(new Date());
+    const hours = Array.from({length: 24}, (_,i) => i);
+
+    const allDay = tasks.filter(t => t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr));
+    const timed = tasks.filter(t => t.time && !t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr));
+    // Background sessions (camp, travel, out-of-office) sit BEHIND the day's real
+    // sessions, spanning full width with a sliver showing at the edges — they're a
+    // backdrop, not a competing block. So they're excluded from the overlap columns.
+    const bgSessions = timed.filter(t => t.isBackground);
+    const fgSessions = timed.filter(t => !t.isBackground);
+    // layoutDayEvents returns an OBJECT keyed by task id: { [id]: {col, cols, start, end} }
+    const layout = layoutDayEvents(fgSessions);
+
+    const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+
+    return (
+      <div className="m-tl">
+        <div className="m-tl-daybar">
+          <button className="m-tl-nav" onClick={() => { const p=new Date(d); p.setDate(p.getDate()-1); setTimelineDay(fmtInput(p)); }}>‹</button>
+          <div className="m-tl-date">
+            <div className="m-tl-dow">{d.toLocaleDateString('en-US',{weekday:'long'})}</div>
+            <div className="m-tl-full">{d.toLocaleDateString('en-US',{month:'long', day:'numeric'})}</div>
+          </div>
+          {!isToday && <button className="m-tl-today" onClick={() => setTimelineDay(fmtInput(new Date()))}>Today</button>}
+          <button className="m-tl-nav" onClick={() => { const n=new Date(d); n.setDate(n.getDate()+1); setTimelineDay(fmtInput(n)); }}>›</button>
+        </div>
+
+        {allDay.length > 0 && (
+          <div className="m-tl-allday">
+            {allDay.map(t => (
+              <div key={t.id} className="m-tl-chip" style={{'--role': roleColor(t.role)}} onClick={() => openSessionView(t, dateStr)}>
+                {t.title}<span className="m-tl-chip-sub">{t.isBackground ? 'background' : 'all day'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="m-tl-grid" ref={mobileTlRef}>
+          {hours.map(h => (
+            <div key={h} className="m-tl-hourrow" style={{height: HOUR_H}}
+              onClick={() => openModalAt(dateStr, h, h*60)}>
+              <div className="m-tl-hourlb">{h===0?'12a':h<12?`${h}a`:h===12?'12p':`${h-12}p`}</div>
+              <div className="m-tl-slot"></div>
+            </div>
+          ))}
+
+          {bgSessions.map(t => {
+            const start = toMinutes(t.time);
+            const end = t.endTime ? toMinutes(t.endTime) : start + 60;
+            const dur = Math.max(20, (end > start ? end : start + 60) - start);
+            const past = t.done || isSessionPast(t, dateStr);
+            return (
+              <div key={t.id} className={`m-tl-clip bg${past ? ' done' : ''}`}
+                style={{
+                  '--role': roleColor(t.role),
+                  top: (start / 60) * HOUR_H,
+                  height: Math.max(26, (dur / 60) * HOUR_H - 2),
+                  left: 52, right: 4, width: 'auto',
+                }}
+                onClick={(e) => { e.stopPropagation(); openSessionView(t, dateStr); }}>
+                <div className="m-tl-clip-title">{t.title}</div>
+                <div className="m-tl-clip-time">{fmtTime(t.time, use24h)}{t.endTime ? `–${fmtTime(t.endTime, use24h)}` : ''}</div>
+              </div>
+            );
+          })}
+
+          {fgSessions.map(t => {
+            const info = layout[t.id] || {};
+            const start = info.start !== undefined ? info.start : toMinutes(t.time);
+            const end = info.end !== undefined ? info.end : start + 60;
+            const col = info.col || 0;
+            const cols = info.cols || 1;
+            const dur = Math.max(20, end - start);
+            const past = t.done || isSessionPast(t, dateStr);
+            // Inset from the left so the background session peeks out behind, like desktop.
+            const widthPct = 100 / cols;
+            return (
+              <div key={t.id} className={`m-tl-clip fg${past ? ' done' : ''}`}
+                style={{
+                  '--role': roleColor(t.role),
+                  top: (start / 60) * HOUR_H,
+                  height: Math.max(26, (dur / 60) * HOUR_H - 2),
+                  left: `calc(66px + ${col * widthPct}%)`,
+                  width: `calc(${widthPct}% - 22px)`,
+                }}
+                onClick={(e) => { e.stopPropagation(); openSessionView(t, dateStr); }}>
+                <div className="m-tl-clip-title">{t.done && '✓ '}{t.title}</div>
+                <div className="m-tl-clip-time">{fmtTime(t.time, use24h)}{t.endTime ? `–${fmtTime(t.endTime, use24h)}` : ''}</div>
+              </div>
+            );
+          })}
+
+          {isToday && <div className="m-tl-now" style={{top: (nowMin/60)*HOUR_H}}></div>}
+        </div>
       </div>
     );
   }
@@ -2304,7 +2422,7 @@ function App() {
           {armedRole ? '● Record-armed — click a spot in the armed lane to add a session there.' : 'Arm a track (R) then click its lane to add a session, or double-click any lane.'}
         </div>
       </div>
-      <div className={`priority-section timeline-themes${isMobile ? ' mobile-drawer-right' : ''}${isMobile && mobileDrawer==='themes' ? ' open' : ''}`}>
+      <div className="priority-section timeline-themes">
         <div className="priority-header">Today's Themes</div>
         <div className="priority-list">
           {(() => {
@@ -2455,9 +2573,10 @@ function App() {
               <div className="vegas-meter" aria-hidden="true">{Array.from({length:7},(_,i)=><span key={i} className="vegas-bar" style={{animationDelay: `${i*0.13}s`}}></span>)}</div>
             </div>
             <div className="m-appbar-sub">
-              {mobileTab === 'browse' ? 'Roles & Themes'
-                : mobileTab === 'timeline' ? new Date(timelineDay + 'T00:00:00').toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'})
-                : mobileTab === 'ask' ? 'Ask Cadence'
+              {mobileDrawer === 'roles' ? 'Roles'
+                : mobileDrawer === 'sessions' ? 'Sessions'
+                : mobileDrawer === 'themes' ? 'Themes'
+                : viewMode === 'timeline' ? new Date(timelineDay + 'T00:00:00').toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'})
                 : `Week of ${currentWeekStart.toLocaleDateString('en-US',{month:'short', day:'numeric'})}`}
             </div>
           </div>
@@ -2475,6 +2594,9 @@ function App() {
                   <input type="text" className="m-menu-search" placeholder="Search sessions & themes…"
                     value={search} onChange={e => setSearch(e.target.value)} />
                 </div>
+                <button className="m-menu-item" onClick={() => { setMobileMenu(false); setMobileDrawer('roles'); }}>☰ Roles</button>
+                <button className="m-menu-item" onClick={() => { setMobileMenu(false); setShowAI(true); }}>✦ Ask Cadence</button>
+                <div className="m-menu-sep" />
                 <button className="m-menu-item" onClick={() => { setMobileMenu(false); exportData(); }}>
                   ⤓ Export Cadence{exportStale && <span className="stale-dot" />}
                 </button>
@@ -2491,6 +2613,15 @@ function App() {
                     <button key={g} className={`m-seg-btn${gridSnap===g?' on':''}`} onClick={() => setGridSnap(g)}>{g}m</button>
                   ))}
                 </div>
+                <div className="m-menu-label">Day starts at</div>
+                <div className="m-menu-row">
+                  <select className="m-menu-search" value={dayStartHour}
+                    onChange={e => setDayStartHour(parseInt(e.target.value, 10))}>
+                    {Array.from({length:24},(_,h)=>(
+                      <option key={h} value={h}>{h===0?'12 AM':h<12?`${h} AM`:h===12?'12 PM':`${h-12} PM`}</option>
+                    ))}
+                  </select>
+                </div>
                 <div className="m-menu-row m-menu-undo">
                   <button className="m-menu-mini" onClick={() => { doUndo(); setMobileMenu(false); }}>⟲ Undo</button>
                   <button className="m-menu-mini" onClick={() => { doRedo(); setMobileMenu(false); }}>⟳ Redo</button>
@@ -2498,6 +2629,19 @@ function App() {
               </div>
             </>
           )}
+        </div>
+      )}
+      {isMobile && (
+        <div className="mobile-bar">
+          <div className="mbar-views">
+            <button className={`mbar-view${viewMode==='score'?' on':''}`} onClick={() => { setViewMode('score'); setMobileDrawer(null); }}>Score</button>
+            <button className={`mbar-view${viewMode==='timeline'?' on':''}`} onClick={() => { setViewMode('timeline'); setMobileDrawer(null); }}>Timeline</button>
+          </div>
+          <div className="mbar-panels">
+            <button className={`mbar-btn${mobileDrawer==='roles'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='roles'?null:'roles')}>☰ Roles</button>
+            <button className={`mbar-btn${mobileDrawer==='sessions'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='sessions'?null:'sessions')}>Sessions</button>
+            <button className={`mbar-btn${mobileDrawer==='themes'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='themes'?null:'themes')}>Themes</button>
+          </div>
         </div>
       )}
       <div className={`body-row${isMobile ? ' mobile' : ''}`}>
@@ -2670,7 +2814,7 @@ function App() {
 
       {/* MAIN */}
       <div className="content">
-        {viewMode === 'timeline' ? renderTimeline() : (isMobile ? renderMobileAgenda() : (
+        {viewMode === 'timeline' ? (isMobile ? renderMobileTimeline() : renderTimeline()) : (isMobile ? renderMobileAgenda() : (
           <>
           <div className="calendar-container">
             <div className="week-header">
@@ -2949,7 +3093,7 @@ function App() {
             </div>
           </div>
 
-          <div className={`priority-section${isMobile ? ' mobile-drawer-right' : ''}${isMobile && mobileDrawer==='themes' ? ' open' : ''}`}>
+          <div className="priority-section">
             <div className="priority-header">
               <span>Themes</span>
               <select value={themesSort} onChange={e => setThemesSort(e.target.value)} className="view-select themes-sort">
@@ -4255,31 +4399,45 @@ function App() {
       )}
       {isMobile && (
         <>
+          {/* One app-level Themes drawer. The per-view themes panels live inside the
+              Score/Timeline branches, which don't render on mobile — that's why the
+              button used to darken the scrim with no panel behind it. */}
+          <div className={`priority-section mobile-drawer-right${mobileDrawer==='themes' ? ' open' : ''}`}>
+            <div className="priority-header">
+              <span>Themes</span>
+              <select value={themesSort} onChange={e => setThemesSort(e.target.value)} className="view-select themes-sort">
+                <option value="priority">By Priority</option>
+                <option value="role">By Role</option>
+                <option value="type">By Type</option>
+              </select>
+            </div>
+            <div className="priority-list">
+              {priorityTasks.length === 0 ? <div className="empty-state">No themes this week</div> :
+                priorityTasks.map(t => (
+                  <div key={t.id} className="priority-item" style={{borderLeftColor: roleColor(t.role)}}
+                    onClick={() => { setMobileDrawer(null); setViewingThemeId(t.id); }}>
+                    <div className="priority-toprow">
+                      <span className={`priority-label priority-${t.priority}`}>{t.priority}</span>
+                      <span className={`theme-kind-badge kind-${t.kind||'weekly'}`}>{(t.kind||'weekly')}</span>
+                    </div>
+                    <span className="priority-title">{t.title}</span>
+                    <div className="priority-meta">
+                      {(() => {
+                        const s = sessionsForTheme(t.id).length + unscheduledForTheme(t.id).length;
+                        return s > 0 ? `${s} session${s>1?'s':''}` : 'no sessions yet';
+                      })()}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
           <button className="m-fab m-fab-left" onClick={() => openModal(true)}>
             <span className="m-fab-plus">+</span><span className="m-fab-lb">Session</span>
           </button>
           <button className="m-fab m-fab-right" onClick={() => openModal(false)}>
             <span className="m-fab-plus">+</span><span className="m-fab-lb">Theme</span>
           </button>
-          <div className="m-tabbar">
-            {[
-              ['browse','▧','Roles & Themes'],
-              ['score','▤','Score'],
-              ['timeline','▦','Timeline'],
-              ['ask','✦','Ask Cadence'],
-            ].map(([k, ic, lb]) => (
-              <button key={k} className={`m-tab${mobileTab===k?' active':''}`}
-                onClick={() => {
-                  setMobileTab(k);
-                  if (k === 'ask') { setShowAI(true); setMobileDrawer(null); }
-                  else if (k === 'browse') { setShowAI(false); setMobileDrawer('roles'); }
-                  else { setShowAI(false); setMobileDrawer(null); }
-                }}>
-                <span className="m-tab-ic">{ic}</span>
-                <span className="m-tab-lb">{lb}</span>
-              </button>
-            ))}
-          </div>
         </>
       )}
     </div>
