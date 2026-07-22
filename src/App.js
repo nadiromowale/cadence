@@ -2011,6 +2011,69 @@ function App() {
     return list;
   }
 
+  // PHASE 3 — Mobile Score: a vertical day-by-day agenda. Same data and rules as the
+  // desktop Score (occursOn, role colors, done/past fading); only the presentation
+  // differs, which is the whole point of one responsive codebase.
+  function renderMobileAgenda() {
+    const todayStr = fmtInput(new Date());
+    const days = Array.from({length:7}, (_,i) => { const d = new Date(currentWeekStart); d.setDate(d.getDate()+i); return fmtInput(d); });
+    return (
+      <div className="m-agenda">
+        {days.map(dateStr => {
+          const d = new Date(dateStr + 'T00:00:00');
+          const isToday = dateStr === todayStr;
+          // All-day / background claims for this day
+          const claims = tasks.filter(t => t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr));
+          // Timed sessions for this day, in time order
+          const timed = tasks
+            .filter(t => t.time && !t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr))
+            .sort((a,b) => (a.time||'').localeCompare(b.time||''));
+          const count = claims.length + timed.length;
+          return (
+            <div key={dateStr} className={`m-day${isToday ? ' m-day-today' : ''}`}>
+              <div className="m-day-head">
+                <span className="m-day-dow">{d.toLocaleDateString('en-US',{weekday:'short'})}</span>
+                <span className="m-day-date">{d.toLocaleDateString('en-US',{month:'short', day:'numeric'})}</span>
+                <span className="m-day-count">{count === 0 ? 'clear' : `${count} session${count>1?'s':''}`}</span>
+              </div>
+              <div className="m-day-items">
+                {claims.map(t => (
+                  <div key={t.id} className="m-claim" style={{'--role': roleColor(t.role)}}
+                    onClick={() => openSessionView(t, dateStr)}>
+                    <div className="m-claim-title">{t.title}</div>
+                    <div className="m-claim-sub">{t.isBackground ? 'Background' : 'All day'} · {roleLabel(t.role)}</div>
+                  </div>
+                ))}
+                {timed.map(t => {
+                  const past = t.done || isSessionPast(t, dateStr);
+                  return (
+                    <div key={t.id + '-' + dateStr} className={`m-sess${past ? ' m-sess-done' : ''}${t.isBackground ? ' m-sess-bg' : ''}`}
+                      style={{'--role': roleColor(t.role)}}
+                      onClick={() => openSessionView(t, dateStr)}>
+                      <div className="m-sess-time">
+                        {fmtTime(t.time, use24h)}
+                        {t.endTime && <><br/><span className="end">{fmtTime(t.endTime, use24h)}</span></>}
+                      </div>
+                      <div className="m-sess-body">
+                        <div className="m-sess-title">
+                          <span className={`m-pri-dot m-pri-${t.priority||'medium'}`}></span>
+                          {t.repeat && t.repeat.freq !== 'none' && <span className="m-sess-rep">🔁</span>}
+                          {t.done && '✓ '}{t.title}
+                        </div>
+                        {t.location && <div className="m-sess-loc">📍 {t.location}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {count === 0 && <div className="m-day-empty">Nothing scheduled</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   function renderTimeline() {
     const dateStr = timelineDay;
     const dObj = parseLocalDate(dateStr);
@@ -2607,7 +2670,7 @@ function App() {
 
       {/* MAIN */}
       <div className="content">
-        {viewMode === 'timeline' ? renderTimeline() : (
+        {viewMode === 'timeline' ? renderTimeline() : (isMobile ? renderMobileAgenda() : (
           <>
           <div className="calendar-container">
             <div className="week-header">
@@ -2951,7 +3014,7 @@ function App() {
             </div>
           </div>
           </>
-          )}
+          ))}
         </div>
       </div>
 
