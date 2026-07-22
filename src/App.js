@@ -446,6 +446,14 @@ function App() {
   const [mobileDrawer, setMobileDrawer] = useState(null); // null | 'roles' | 'sessions' | 'themes'
   // Phase 2: mobile bottom-tab navigation. 'browse' = Roles & Themes, 'score', 'timeline', 'ask'
   const [mobileMenu, setMobileMenu] = useState(false);
+  // Opening splash: shows only on a genuine app load (not on re-render), then fades.
+  const [splash, setSplash] = useState(true);
+  useEffect(() => {
+    const hold = setTimeout(() => setSplash(false), 2100); // hold, then fade
+    return () => clearTimeout(hold);
+  }, []);
+  const [expandedRoles, setExpandedRoles] = useState({}); // roleId -> bool (mobile Roles browser)
+  const [roleSearch, setRoleSearch] = useState('');
   const mobileTlRef = useRef(null);
   const mobileAgendaRef = useRef(null);
   // On mobile, open the Score with TODAY at the top — past days scroll up out of the
@@ -2225,6 +2233,22 @@ function App() {
     );
   }
 
+  // Everything belonging to a role, for the mobile Roles browser: its themes, plus any
+  // sessions that stand alone (not filed under a theme) — otherwise those are invisible.
+  function roleContents(roleId) {
+    const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    const q = roleSearch.trim().toLowerCase();
+    const match = t => !q || (t.title || '').toLowerCase().includes(q);
+    const themes = tasks.filter(t => t.role === roleId && isTheme(t) && !t.done && match(t));
+    const loose = tasks.filter(t => {
+      if (t.role !== roleId || isTheme(t) || t.done) return false;
+      const tagged = (t.themeIds && t.themeIds.length > 0) || t.themeId != null;
+      if (tagged || t.parentId != null) return false; // lives under a theme, shown there
+      return match(t);
+    });
+    return { themes, loose };
+  }
+
   function renderTimeline() {
     const dateStr = timelineDay;
     const dObj = parseLocalDate(dateStr);
@@ -2539,6 +2563,16 @@ function App() {
 
   return (
     <div className="app-container">
+      {splash && (
+        <div className="splash" aria-hidden="true">
+          <div className="splash-inner">
+            <div className="splash-meter">
+              {Array.from({length:7},(_,i)=><span key={i} className="vegas-bar" style={{animationDelay: `${i*0.13}s`}}></span>)}
+            </div>
+            <div className="splash-word">Cadence Studio</div>
+          </div>
+        </div>
+      )}
       {/* TOP BAR — full width */}
       <div className="header">
         <div className="brand"><h1>Cadence Studio</h1><div className="vegas-meter" aria-hidden="true">{Array.from({length:7},(_,i)=><span key={i} className="vegas-bar" style={{animationDelay: `${i*0.13}s`}}></span>)}</div></div>
@@ -2685,18 +2719,74 @@ function App() {
           <h2>Roles</h2>
           <button className="icon-btn settings-gear" onClick={() => { setSettingsTab('roles'); setShowSettings(true); }} title="Settings">⚙</button>
         </div>
+        {isMobile && (
+          <div className="role-search-wrap">
+            <input type="text" className="role-search" placeholder="Search roles, themes, sessions…"
+              value={roleSearch} onChange={e => setRoleSearch(e.target.value)} />
+          </div>
+        )}
         <div className="role-list">
           <button className={`role-item ${selectedRole==='all'?'active':''}`} onClick={() => setSelectedRole('all')} style={{borderLeftColor:'#999'}}>
             <span className="role-dot" style={{backgroundColor:'#999'}}></span> All Roles
           </button>
-          {roles.map(role => (
-            <div key={role.id} className={`role-item-wrap ${selectedRole===role.id?'active':''}`} style={{backgroundColor: selectedRole===role.id?`${role.color}30`:'transparent'}}>
-              <button className="role-item-main" style={{borderLeftColor:role.color}} onClick={() => setSelectedRole(role.id)}>
-                <span className="role-dot" style={{backgroundColor:role.color}}></span>{role.label}
-              </button>
-              <button className="role-info-btn" title="Open role details" onClick={(e) => { e.stopPropagation(); setProfileRoleId(role.id); }}>ⓘ</button>
-            </div>
-          ))}
+          {roles.map(role => {
+            if (!isMobile) return (
+              <div key={role.id} className={`role-item-wrap ${selectedRole===role.id?'active':''}`} style={{backgroundColor: selectedRole===role.id?`${role.color}30`:'transparent'}}>
+                <button className="role-item-main" style={{borderLeftColor:role.color}} onClick={() => setSelectedRole(role.id)}>
+                  <span className="role-dot" style={{backgroundColor:role.color}}></span>{role.label}
+                </button>
+                <button className="role-info-btn" title="Open role details" onClick={(e) => { e.stopPropagation(); setProfileRoleId(role.id); }}>ⓘ</button>
+              </div>
+            );
+            // MOBILE: caret expands the role; the name still filters; ⓘ opens Details.
+            const open = !!expandedRoles[role.id] || !!roleSearch.trim();
+            const { themes, loose } = roleContents(role.id);
+            return (
+              <div key={role.id} className={`role-folder${open ? ' open' : ''}`} style={{'--role': role.color}}>
+                <div className={`role-item-wrap ${selectedRole===role.id?'active':''}`} style={{backgroundColor: selectedRole===role.id?`${role.color}30`:'transparent'}}>
+                  <button className="role-caret" title={open ? 'Collapse' : 'Expand'}
+                    onClick={(e) => { e.stopPropagation(); setExpandedRoles(p => ({...p, [role.id]: !p[role.id]})); }}>▶</button>
+                  <button className="role-item-main" style={{borderLeftColor:role.color}} onClick={() => setSelectedRole(role.id)}>
+                    <span className="role-dot" style={{backgroundColor:role.color}}></span>{role.label}
+                  </button>
+                  {(themes.length + loose.length) > 0 && <span className="role-count">{themes.length + loose.length}</span>}
+                  <button className="role-info-btn" title="Open role details" onClick={(e) => { e.stopPropagation(); setProfileRoleId(role.id); }}>ⓘ</button>
+                </div>
+                {open && (
+                  <div className="role-children">
+                    {themes.length === 0 && loose.length === 0 && (
+                      <div className="folder-empty">Nothing here yet.</div>
+                    )}
+                    {themes.map(t => {
+                      const n = sessionsForTheme(t.id).length + unscheduledForTheme(t.id).length;
+                      return (
+                        <div key={t.id} className="theme-row" onClick={() => { setMobileDrawer(null); setViewingThemeId(t.id); }}>
+                          <span className={`theme-kind kind-${t.kind||'weekly'}`}>{t.kind||'weekly'}</span>
+                          <div className="theme-body">
+                            <div className="theme-name">{t.title}</div>
+                            <div className="theme-sub">{n > 0 ? `${n} session${n>1?'s':''}` : 'no sessions yet'}</div>
+                          </div>
+                          <span className="theme-chevron">›</span>
+                        </div>
+                      );
+                    })}
+                    {loose.map(s => (
+                      <div key={s.id} className="theme-row loose-row" onClick={() => { setMobileDrawer(null); openSessionView(s, s.startDate); }}>
+                        <span className="theme-kind kind-session">session</span>
+                        <div className="theme-body">
+                          <div className="theme-name">{s.title}</div>
+                          <div className="theme-sub">
+                            {s.allDay ? 'all day' : s.time ? `${fmtTime(s.time, use24h)}${s.startDate ? ' · ' + new Date(s.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : ''}` : 'unscheduled'}
+                          </div>
+                        </div>
+                        <span className="theme-chevron">›</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="sidebar-section">
