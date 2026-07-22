@@ -1156,6 +1156,44 @@ textarea { resize: vertical; }
 
   /* ---- PHASE 3: the Score agenda ---- */
   .m-agenda { flex: 1; overflow-y: auto; padding: 8px 8px 10px; background: var(--paper); }
+  /* Week navigation, right in the agenda where you're reading */
+  .m-week-nav { display: flex; gap: 6px; margin-bottom: 10px; }
+  .m-week-btn { flex: 1; font-family: var(--font-small); font-size: calc(var(--small-fs, 12.5px) + 2px);
+    font-weight: 700; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 7px; padding: 10px 4px; cursor: pointer; white-space: nowrap; }
+  .m-week-btn:active { background: var(--surface-2); }
+  .m-week-today { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+  /* ---- Editor form on a narrow screen ----
+     .form-row is a 2-column grid on desktop (Start Time | End Time). At phone width
+     each time entry (hour + minute + AM/PM + clear) is wider than half the screen, so
+     the End Time ran off the right edge. Stack the rows instead. */
+  .form-row { grid-template-columns: 1fr; gap: 10px; }
+  .form-row .form-group > label { min-height: 0; margin-bottom: 4px; }
+
+  /* Time entry: let the parts wrap rather than run off-screen. */
+  .time-entry { flex-wrap: wrap; gap: 6px; }
+  .time-entry input[type="number"] { width: 58px; }
+
+  /* Reminder row: date on its own line, time parts below */
+  .reminder-row { flex-wrap: wrap; gap: 8px; }
+  .reminder-row input[type="date"] { flex: 1 1 100%; min-width: 0; }
+
+  /* ONE uniform size for every field inside the editor. Individual rules per input
+     type left them mismatched (dates, numbers and selects each rendering differently).
+     16px also stops mobile browsers auto-zooming when a field is focused. */
+  .modal-content input,
+  .modal-content textarea,
+  .modal-content select {
+    font-size: 16px;
+    font-family: var(--font-small);
+    padding: 10px;
+    box-sizing: border-box;
+  }
+  .modal-content input[type="date"] { width: 100%; }
+  .modal-content input[type="number"] { padding: 10px 6px; text-align: center; }
+  .modal-content input[type="checkbox"] { padding: 0; width: 18px; height: 18px; }
+  .modal-content { padding-left: 14px; padding-right: 14px; }
   .m-day { margin-bottom: 16px; }
   .m-day-head { display: flex; align-items: center; gap: 10px; padding: 9px 13px; position: sticky; top: 0; z-index: 5;
     border-radius: 5px; background: linear-gradient(to bottom, #4A4A4A, #383838);

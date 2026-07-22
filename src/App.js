@@ -455,7 +455,12 @@ function App() {
     const el = mobileAgendaRef.current;
     if (!el) return;
     const today = el.querySelector('[data-today="1"]');
-    if (today) el.scrollTop = today.offsetTop - el.offsetTop;
+    if (today) {
+      // Scroll today near the top but keep the week nav peeking above it.
+      const nav = el.querySelector('.m-week-nav');
+      const navH = nav ? nav.offsetHeight + 8 : 0;
+      el.scrollTop = Math.max(0, today.offsetTop - el.offsetTop - navH);
+    }
     else el.scrollTop = 0; // different week — start at the top
   }, [isMobile, viewMode, currentWeekStart, tasks.length]);
   useEffect(() => {
@@ -626,7 +631,17 @@ function App() {
       // STAGE 1 migration: give dateless themes the new week-scoped model.
       // kind: 'standing' | 'weekly' | 'project'. themeWeek = Monday of the week it belongs to.
       // migratedClean marks pre-existing themes so the Unfinished Business tray starts fresh from here.
-      const migrated = parsed.map(task => {
+      // REPAIR PASS: an end date before the start is invalid and breaks how a session
+      // renders and spans. Fix any that already exist in saved data (from older bugs,
+      // imports, or edits that skipped validation) rather than waiting for an edit.
+      const repaired = parsed.map(task => {
+        if (task.startDate && task.endDate && task.endDate < task.startDate) {
+          return { ...task, endDate: task.startDate };
+        }
+        return task;
+      });
+
+      const migrated = repaired.map(task => {
         if (task.kind) return task; // already has a theme kind — leave it
         // A session tagged to a parent theme (or nested under one) is NOT a theme,
         // even with no time. Don't stamp it — that was reverting conversions on reload.
@@ -1387,7 +1402,13 @@ function App() {
       title: task.title, role: task.role, priority: task.priority, isBackground: !!task.isBackground,
       themeIds: task.themeIds || (task.themeId ? [task.themeId] : []), done: !!task.done, allDay: !!task.allDay,
       startDate: occurrenceDate && rep.freq && rep.freq !== 'none' ? occurrenceDate : task.startDate,
-      endDate: task.endDate || '', time: task.time || '',
+      // Clamp a stale end-before-start so the editor never shows an invalid range.
+      endDate: (() => {
+        const sd = occurrenceDate && rep.freq && rep.freq !== 'none' ? occurrenceDate : task.startDate;
+        const ed = task.endDate || '';
+        return (sd && ed && ed < sd) ? sd : ed;
+      })(),
+      time: task.time || '',
       endTime: task.endTime || '', duration: task.duration || '', location: task.location || '',
       notes: task.notes || '', links: Array.isArray(task.links) ? task.links.join('\n') : (task.links || ''), tags: (task.tags || []).join(', '),
       reminderDate: task.reminder ? task.reminder.split('T')[0] : '',
@@ -1434,6 +1455,12 @@ function App() {
   }
 
   function buildTaskData() {
+    // An end date before the start is invalid however it got there (stale data, an
+    // edit that skipped the date handler, imported data). Normalise it here so a bad
+    // range can never be saved.
+    const fd = (formData.startDate && formData.endDate && formData.endDate < formData.startDate)
+      ? { ...formData, endDate: formData.startDate }
+      : formData;
     return {
       id: editingId || Date.now(),
       title: formData.title.trim(),
@@ -1452,10 +1479,11 @@ function App() {
         return formData.startDate || formData.themeWeek || fmtInput(currentWeekStart);
       })(),
       endDate: (() => {
-        if (formData.draftKind === 'session') return formData.endDate || '';
-        const taggedToTheme = (formData.themeIds && formData.themeIds.length > 0) || formData.themeId != null;
-        if (taggedToTheme || formData.time || formData.allDay) return formData.endDate || '';
-        return formData.themeEnd || formData.themeWeek || formData.startDate || fmtInput(currentWeekStart);
+        // uses fd (normalised above) so an end-before-start can't slip through
+        if (fd.draftKind === 'session') return fd.endDate || '';
+        const taggedToTheme = (fd.themeIds && fd.themeIds.length > 0) || fd.themeId != null;
+        if (taggedToTheme || fd.time || fd.allDay) return fd.endDate || '';
+        return fd.themeEnd || fd.themeWeek || fd.startDate || fmtInput(currentWeekStart);
       })(),
       time: formData.allDay ? '' : formData.time,
       endTime: formData.allDay ? '' : (formData.endTime || (formData.time && formData.duration ? minToHHMM(toMinutes(formData.time) + parseInt(formData.duration, 10)) : '')),
@@ -2032,6 +2060,11 @@ function App() {
     const days = Array.from({length:7}, (_,i) => { const d = new Date(currentWeekStart); d.setDate(d.getDate()+i); return fmtInput(d); });
     return (
       <div className="m-agenda" ref={mobileAgendaRef}>
+        <div className="m-week-nav">
+          <button className="m-week-btn" onClick={() => { const d=new Date(currentWeekStart); d.setDate(d.getDate()-7); setCurrentWeekStart(d); }}>‹ Prev</button>
+          <button className="m-week-btn m-week-today" onClick={() => setCurrentWeekStart(getMonday(new Date()))}>This week</button>
+          <button className="m-week-btn" onClick={() => { const d=new Date(currentWeekStart); d.setDate(d.getDate()+7); setCurrentWeekStart(d); }}>Next ›</button>
+        </div>
         {days.map(dateStr => {
           const d = new Date(dateStr + 'T00:00:00');
           const isToday = dateStr === todayStr;
@@ -3291,17 +3324,28 @@ function App() {
                   <input type="date" value={formData.startDate} onChange={e => {
                     const ns = e.target.value;
                     let ne = formData.endDate;
-                    if (ns && formData.startDate && formData.endDate) {
-                      const spanDays = Math.round((new Date(formData.endDate+'T00:00:00') - new Date(formData.startDate+'T00:00:00')) / 86400000);
-                      const d = new Date(ns+'T00:00:00'); d.setDate(d.getDate() + Math.max(0, spanDays));
+                    if (!ns) {
+                      // Start cleared → the session is unscheduled; clear the end too.
+                      ne = '';
+                    } else if (formData.startDate && formData.endDate) {
+                      // Had a real range: move the end by the same number of days so a
+                      // multi-day session keeps its length.
+                      const spanDays = Math.max(0, Math.round((new Date(formData.endDate+'T00:00:00') - new Date(formData.startDate+'T00:00:00')) / 86400000));
+                      const d = new Date(ns+'T00:00:00'); d.setDate(d.getDate() + spanDays);
                       ne = fmtInput(d);
-                    } else if (ns && formData.endDate && formData.endDate < ns) {
+                    } else if (!formData.endDate || formData.endDate < ns) {
+                      // No end yet, or a stale end now before the new start → same day.
                       ne = ns;
                     }
                     setFormData({...formData, startDate: ns, endDate: ne});
                   }} />
                 </div>
-                <div className="form-group"><label>End Date <span className="field-hint-inline">(optional)</span></label><input type="date" min={formData.startDate || undefined} value={formData.endDate} onChange={e => setFormData({...formData,endDate:e.target.value})}/></div>
+                <div className="form-group"><label>End Date <span className="field-hint-inline">(optional)</span></label><input type="date" min={formData.startDate || undefined} value={formData.endDate} onChange={e => {
+                  const v = e.target.value;
+                  // Never allow an end before the start — clamp it to the start date.
+                  const clamped = (v && formData.startDate && v < formData.startDate) ? formData.startDate : v;
+                  setFormData({...formData, endDate: clamped});
+                }}/></div>
               </div>
               {!formData.allDay && (
               <>
