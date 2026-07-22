@@ -1068,10 +1068,85 @@ textarea { resize: vertical; }
   .header-controls { flex-wrap: wrap; gap: 6px; }
   .vegas-meter { display: none; } /* save space up top */
 
-  /* Mobile control bar under the header */
-  .mobile-bar { display: flex; gap: 6px; padding: 6px 10px; background: var(--chrome-3); border-bottom: 1px solid var(--chrome-line); flex-shrink: 0; }
-  .mbar-btn { flex: 1; font-family: var(--font-small); font-size: 12px; font-weight: 700; color: var(--rail-ink); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 8px 6px; cursor: pointer; }
-  .mbar-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* PHASE 2 — App bar (top) */
+  .header { display: none; } /* desktop header replaced by the mobile app bar */
+  .m-appbar { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 14px 10px; position: sticky; top: 0; z-index: 60; flex-shrink: 0;
+    background: linear-gradient(to bottom, #4C4C4C, var(--chrome-2, #3a3a3a));
+    border-bottom: 1px solid var(--chrome-line);
+    box-shadow: inset 0 2px 0 rgba(255,255,255,0.10), inset 0 1px 0 var(--chrome-hi), inset 0 -3px 5px rgba(0,0,0,0.4); }
+  .m-appbar-left { min-width: 0; }
+  .m-appbar-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .m-appbar-title h1 { font-family: var(--font-display); font-size: 18px; font-weight: 700; color: #fff; letter-spacing: -0.01em; white-space: nowrap; margin: 0; }
+  .m-appbar-title .vegas-meter { display: flex; }
+  .m-appbar-sub { font-family: var(--font-mono); font-size: 10px; color: var(--rail-ink-2); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-appbar-search { flex: 0 0 auto; font-size: 17px; color: var(--rail-ink); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; width: 34px; height: 32px; cursor: pointer; }
+  .m-appbar-right { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+  .m-nav-btn { font-family: var(--font-small); font-size: 13px; font-weight: 700; color: var(--rail-ink);
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); border-radius: 7px;
+    min-width: 28px; height: 32px; padding: 0 7px; cursor: pointer; }
+  .m-nav-btn:active { background: rgba(255,255,255,0.2); }
+  .m-nav-today { font-size: 11px; }
+
+  /* PHASE 2 — Twin add buttons, floating above the tab bar */
+  .m-fab { position: fixed; bottom: 78px; display: flex; align-items: center; gap: 6px; height: 46px;
+    padding: 0 16px 0 13px; border-radius: 23px; z-index: 90; cursor: pointer; color: #fff;
+    background: linear-gradient(to bottom, #2aa0b5, #177888); border: 1px solid #0f5563;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.3); }
+  .m-fab-left { left: 16px; }
+  .m-fab-right { right: 16px; }
+  .m-fab-plus { font-size: 22px; line-height: 1; }
+  .m-fab-lb { font-family: var(--font-small); font-size: 13px; font-weight: 700; }
+
+  /* PHASE 2 — Bottom tab bar */
+  .m-tabbar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; z-index: 100;
+    background: linear-gradient(to bottom, var(--chrome-2, #3a3a3a), var(--chrome-3, #2d2d2d));
+    border-top: 1px solid var(--chrome-line);
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.3), inset 0 1px 0 var(--chrome-hi);
+    padding: 8px 0 max(10px, env(safe-area-inset-bottom)); }
+  .m-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0;
+    background: none; border: none; color: var(--rail-ink-2); cursor: pointer; padding: 2px; }
+  .m-tab.active { color: #5FF3DC; }
+  .m-tab-ic { font-size: 18px; line-height: 1; }
+  .m-tab-lb { font-family: var(--font-small); font-size: 9.5px; font-weight: 600; text-align: center; line-height: 1.15; }
+
+  /* Leave room for the tab bar so content isn't hidden behind it */
+  .body-row.mobile { padding-bottom: 74px; }
+
+  /* ---- Mobile type scale: phone text needs to be bigger than desktop ---- */
+  /* Roles list — was tiny with a lot of dead space below */
+  .role-item-main { font-size: 15px; padding: 12px 11px; gap: 10px; }
+  .role-item { font-size: 15px; padding: 11px 10px; }
+  .role-item-main .role-dot, .role-item .role-dot { width: 11px; height: 11px; }
+  .sidebar-top h2 { font-size: 17px; }
+  .rail-setting-label { font-size: 11px; }
+
+  /* Session chips in the Sessions drawer */
+  .task-chip { padding: 10px 12px 11px; min-height: 58px; margin-bottom: 7px; }
+  .task-chip-title { font-size: 15px; }
+  .task-chip-time { font-size: 12px; }
+  .task-chip-date { font-size: 12px; }
+  .task-col-head h2, .priority-header { font-size: 16px; }
+
+  /* Theme cards in the Themes drawer */
+  .priority-item { padding: 9px 11px 10px; min-height: 56px; }
+  .priority-title { font-size: 15px; }
+  .priority-meta { font-size: 12px; }
+  .priority-label { font-size: 10px; padding: 3px 6px; }
+  .theme-kind-badge { font-size: 10px; padding: 3px 6px; }
+
+  /* World clock */
+  .wc-city { font-size: 14px; }
+  .wc-time { font-size: 14px; }
+
+  /* Bottom tab labels — 9.5px is too small on a real phone */
+  .m-tab-ic { font-size: 20px; }
+  .m-tab-lb { font-size: 11px; }
+
+  /* Timeline role lane labels */
+  .tl-role-name { font-size: 14px; }
+  .clip-title { font-size: 13px; }
+  .clip-time { font-size: 11px; }
 
   /* The body becomes a single column; the calendar/timeline fills it */
   .body-row.mobile { position: relative; }
