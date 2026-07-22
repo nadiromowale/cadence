@@ -1070,7 +1070,7 @@ textarea { resize: vertical; }
 
   /* PHASE 2 — App bar (top) */
   .header { display: none; } /* desktop header replaced by the mobile app bar */
-  .m-appbar { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  .m-appbar { position: sticky; display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 12px 14px 10px; position: sticky; top: 0; z-index: 60; flex-shrink: 0;
     background: linear-gradient(to bottom, #4C4C4C, var(--chrome-2, #3a3a3a));
     border-bottom: 1px solid var(--chrome-line);
@@ -1113,40 +1113,64 @@ textarea { resize: vertical; }
   /* Leave room for the tab bar so content isn't hidden behind it */
   .body-row.mobile { padding-bottom: 74px; }
 
-  /* ---- Mobile type scale: phone text needs to be bigger than desktop ---- */
-  /* Roles list — was tiny with a lot of dead space below */
-  .role-item-main { font-size: 15px; padding: 12px 11px; gap: 10px; }
-  .role-item { font-size: 15px; padding: 11px 10px; }
+  /* ---- Mobile type scale ----
+     IMPORTANT: scale the density VARIABLES, don't hardcode sizes. Density (Airy/
+     Balanced/Compact) sets --small-fs / --micro-fs / --chip-pad; hardcoding px here
+     would override it and make the Density setting do nothing on mobile. Instead we
+     bump each density step up for phone reading and let the setting keep working. */
+  .role-item-main { font-size: calc(var(--small-fs, 12px) + 2.5px); padding: calc(var(--chip-pad, 9px) + 3px) 11px; gap: 10px; }
+  .role-item { font-size: calc(var(--small-fs, 12px) + 2.5px); padding: calc(var(--chip-pad, 9px) + 2px) 10px; }
   .role-item-main .role-dot, .role-item .role-dot { width: 11px; height: 11px; }
   .sidebar-top h2 { font-size: 17px; }
-  .rail-setting-label { font-size: 11px; }
 
   /* Session chips in the Sessions drawer */
-  .task-chip { padding: 10px 12px 11px; min-height: 58px; margin-bottom: 7px; }
-  .task-chip-title { font-size: 15px; }
-  .task-chip-time { font-size: 12px; }
-  .task-chip-date { font-size: 12px; }
+  .task-chip { padding: calc(var(--chip-pad, 9px) + 1px) 12px calc(var(--chip-pad, 9px) + 2px); min-height: 0; margin-bottom: 7px; }
+  .task-chip-title { font-size: calc(var(--small-fs, 12.5px) + 2.5px); }
+  .task-chip-time { font-size: calc(var(--micro-fs, 10px) + 2px); }
+  .task-chip-date { font-size: calc(var(--micro-fs, 10px) + 2px); }
   .task-col-head h2, .priority-header { font-size: 16px; }
 
   /* Theme cards in the Themes drawer */
-  .priority-item { padding: 9px 11px 10px; min-height: 56px; }
-  .priority-title { font-size: 15px; }
-  .priority-meta { font-size: 12px; }
-  .priority-label { font-size: 10px; padding: 3px 6px; }
-  .theme-kind-badge { font-size: 10px; padding: 3px 6px; }
+  .priority-item { padding: calc(var(--chip-pad, 9px)) 11px calc(var(--chip-pad, 9px) + 1px); min-height: 0; }
+  .priority-title { font-size: calc(var(--small-fs, 12.5px) + 2.5px); }
+  .priority-meta { font-size: calc(var(--micro-fs, 10px) + 2px); }
+  .priority-label, .theme-kind-badge { font-size: calc(var(--micro-fs, 10px) + 0.5px); padding: 3px 6px; }
 
   /* World clock */
-  .wc-city { font-size: 14px; }
-  .wc-time { font-size: 14px; }
+  .wc-city, .wc-time { font-size: calc(var(--small-fs, 12px) + 2px); }
+
+  /* Overflow menu in the app bar — holds what the desktop header used to:
+     search, Export/Import, Settings, grid size, undo/redo. */
+  .m-menu-scrim { position: fixed; inset: 0; z-index: 70; }
+  .m-menu { position: absolute; top: 100%; right: 8px; z-index: 80; width: 250px;
+    background: var(--raised); border: 1px solid var(--line-strong); border-radius: 9px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.45); padding: 8px; }
+  .m-menu-row { padding: 2px; }
+  .m-menu-search { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--line);
+    border-radius: 6px; font-family: var(--font-small); font-size: 14px; background: var(--surface); color: var(--ink); }
+  .m-menu-item { display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box;
+    text-align: left; background: none; border: none; border-radius: 6px; padding: 11px 10px; cursor: pointer;
+    font-family: var(--font-small); font-size: 14px; font-weight: 600; color: var(--ink); }
+  .m-menu-item:hover, .m-menu-item:active { background: var(--surface-2); }
+  .m-menu-item .stale-dot { position: static; box-shadow: none; width: 7px; height: 7px; }
+  .m-menu-sep { height: 1px; background: var(--line); margin: 6px 2px; }
+  .m-menu-label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-4); padding: 2px 10px 5px; }
+  .m-menu-seg { display: flex; gap: 5px; padding: 0 2px 4px; }
+  .m-seg-btn { flex: 1; font-family: var(--font-small); font-size: 13px; font-weight: 600; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 0; cursor: pointer; }
+  .m-seg-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .m-menu-undo { display: flex; gap: 5px; padding-top: 4px; }
+  .m-menu-mini { flex: 1; font-family: var(--font-small); font-size: 13px; font-weight: 600; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 9px 0; cursor: pointer; }
 
   /* Bottom tab labels — 9.5px is too small on a real phone */
   .m-tab-ic { font-size: 20px; }
   .m-tab-lb { font-size: 11px; }
 
-  /* Timeline role lane labels */
-  .tl-role-name { font-size: 14px; }
-  .clip-title { font-size: 13px; }
-  .clip-time { font-size: 11px; }
+  /* Timeline */
+  .tl-role-name { font-size: calc(var(--small-fs, 12px) + 2px); }
+  .clip-title { font-size: calc(var(--chip-fs, 13px) + 0.5px); }
+  .clip-time { font-size: calc(var(--micro-fs, 10px) + 1px); }
 
   /* The body becomes a single column; the calendar/timeline fills it */
   .body-row.mobile { position: relative; }

@@ -444,12 +444,21 @@ function App() {
   const [settingsTab, setSettingsTab] = useState('roles'); // roles | display | clock | profile
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 640);
   const [mobileDrawer, setMobileDrawer] = useState(null); // null | 'roles' | 'sessions' | 'themes'
+  // Phase 2: mobile bottom-tab navigation. 'browse' = Roles & Themes, 'score', 'timeline', 'ask'
+  const [mobileTab, setMobileTab] = useState('score');
+  const [mobileMenu, setMobileMenu] = useState(false);
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth <= 640);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
   useEffect(() => { if (!isMobile) setMobileDrawer(null); }, [isMobile]);
+  // Mobile tabs drive the underlying view so Score/Timeline stay in sync with the tab bar.
+  useEffect(() => {
+    if (!isMobile) return;
+    if (mobileTab === 'score' && viewMode !== 'score') setViewMode('score');
+    if (mobileTab === 'timeline' && viewMode !== 'timeline') setViewMode('timeline');
+  }, [mobileTab, isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
   const [clockCities, setClockCities] = useState(() => {
     try { const s = localStorage.getItem('planner-clocks'); if (s) return JSON.parse(s); } catch {}
     return [
@@ -2376,10 +2385,56 @@ function App() {
 
       {/* BODY ROW */}
       {isMobile && (
-        <div className="mobile-bar">
-          <button className={`mbar-btn${mobileDrawer==='roles'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='roles'?null:'roles')}>☰ Roles</button>
-          <button className={`mbar-btn${mobileDrawer==='sessions'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='sessions'?null:'sessions')}>Sessions</button>
-          <button className={`mbar-btn${mobileDrawer==='themes'?' on':''}`} onClick={() => setMobileDrawer(mobileDrawer==='themes'?null:'themes')}>Themes</button>
+        <div className="m-appbar">
+          <div className="m-appbar-left">
+            <div className="m-appbar-title">
+              <h1>Cadence Studio</h1>
+              <div className="vegas-meter" aria-hidden="true">{Array.from({length:7},(_,i)=><span key={i} className="vegas-bar" style={{animationDelay: `${i*0.13}s`}}></span>)}</div>
+            </div>
+            <div className="m-appbar-sub">
+              {mobileTab === 'browse' ? 'Roles & Themes'
+                : mobileTab === 'timeline' ? new Date(timelineDay + 'T00:00:00').toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'})
+                : mobileTab === 'ask' ? 'Ask Cadence'
+                : `Week of ${currentWeekStart.toLocaleDateString('en-US',{month:'short', day:'numeric'})}`}
+            </div>
+          </div>
+          <div className="m-appbar-right">
+            <button className="m-nav-btn" onClick={() => { if (viewMode==='timeline') { const d=new Date(timelineDay+'T00:00:00'); d.setDate(d.getDate()-1); setTimelineDay(fmtInput(d)); } else { const d=new Date(currentWeekStart); d.setDate(d.getDate()-7); setCurrentWeekStart(d); } }} title="Previous">‹</button>
+            <button className="m-nav-btn m-nav-today" onClick={() => { const t=new Date(); setCurrentWeekStart(getMonday(t)); setTimelineDay(fmtInput(t)); }} title="Today">Today</button>
+            <button className="m-nav-btn" onClick={() => { if (viewMode==='timeline') { const d=new Date(timelineDay+'T00:00:00'); d.setDate(d.getDate()+1); setTimelineDay(fmtInput(d)); } else { const d=new Date(currentWeekStart); d.setDate(d.getDate()+7); setCurrentWeekStart(d); } }} title="Next">›</button>
+            <button className="m-appbar-search" onClick={() => setMobileMenu(!mobileMenu)} title="More">⋮</button>
+          </div>
+          {mobileMenu && (
+            <>
+              <div className="m-menu-scrim" onClick={() => setMobileMenu(false)} />
+              <div className="m-menu">
+                <div className="m-menu-row">
+                  <input type="text" className="m-menu-search" placeholder="Search sessions & themes…"
+                    value={search} onChange={e => setSearch(e.target.value)} />
+                </div>
+                <button className="m-menu-item" onClick={() => { setMobileMenu(false); exportData(); }}>
+                  ⤓ Export Cadence{exportStale && <span className="stale-dot" />}
+                </button>
+                <label className="m-menu-item">
+                  ⤒ Import Cadence…
+                  <input type="file" accept="application/json,.json" style={{display:'none'}}
+                    onChange={e => { if (e.target.files && e.target.files[0]) { setMobileMenu(false); importData(e.target.files[0]); e.target.value=''; } }} />
+                </label>
+                <button className="m-menu-item" onClick={() => { setMobileMenu(false); setSettingsTab('roles'); setShowSettings(true); }}>⚙ Settings</button>
+                <div className="m-menu-sep" />
+                <div className="m-menu-label">Grid</div>
+                <div className="m-menu-seg">
+                  {[15,30,60].map(g => (
+                    <button key={g} className={`m-seg-btn${gridSnap===g?' on':''}`} onClick={() => setGridSnap(g)}>{g}m</button>
+                  ))}
+                </div>
+                <div className="m-menu-row m-menu-undo">
+                  <button className="m-menu-mini" onClick={() => { doUndo(); setMobileMenu(false); }}>⟲ Undo</button>
+                  <button className="m-menu-mini" onClick={() => { doRedo(); setMobileMenu(false); }}>⟳ Redo</button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
       <div className={`body-row${isMobile ? ' mobile' : ''}`}>
@@ -4134,6 +4189,35 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+      {isMobile && (
+        <>
+          <button className="m-fab m-fab-left" onClick={() => openModal(true)}>
+            <span className="m-fab-plus">+</span><span className="m-fab-lb">Session</span>
+          </button>
+          <button className="m-fab m-fab-right" onClick={() => openModal(false)}>
+            <span className="m-fab-plus">+</span><span className="m-fab-lb">Theme</span>
+          </button>
+          <div className="m-tabbar">
+            {[
+              ['browse','▧','Roles & Themes'],
+              ['score','▤','Score'],
+              ['timeline','▦','Timeline'],
+              ['ask','✦','Ask Cadence'],
+            ].map(([k, ic, lb]) => (
+              <button key={k} className={`m-tab${mobileTab===k?' active':''}`}
+                onClick={() => {
+                  setMobileTab(k);
+                  if (k === 'ask') { setShowAI(true); setMobileDrawer(null); }
+                  else if (k === 'browse') { setShowAI(false); setMobileDrawer('roles'); }
+                  else { setShowAI(false); setMobileDrawer(null); }
+                }}>
+                <span className="m-tab-ic">{ic}</span>
+                <span className="m-tab-lb">{lb}</span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
