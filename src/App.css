@@ -247,8 +247,10 @@ button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; f
 /* MODAL */
 .modal-overlay { position: fixed; inset: 0; background: rgba(30,24,14,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: var(--raised); border: 1px solid var(--line); border-radius: 5px; padding: 24px; max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto; position: relative; box-shadow: 0 12px 40px rgba(30,24,14,0.3); }
-.modal-header { font-family: var(--font-display); font-size: 19px; font-weight: 700; color: var(--ink); margin-bottom: 16px; }
-.modal-close { position: absolute; top: 12px; right: 12px; background: none; border: none; font-size: 22px; color: var(--ink-4); cursor: pointer; }
+/* Reserve room on the right so a long title + kind badge can't slide under the ×. */
+.modal-header { font-family: var(--font-display); font-size: 19px; font-weight: 700; color: var(--ink); margin-bottom: 16px; padding-right: 40px; }
+.modal-close { position: absolute; top: 12px; right: 12px; z-index: 5; background: var(--raised); border: none; border-radius: 50%; width: 30px; height: 30px; line-height: 1; font-size: 20px; color: var(--ink-3); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.modal-close:hover { color: var(--ink); background: var(--surface-2); }
 .modal-close:hover { color: var(--ink); }
 .form-group { margin-bottom: 14px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -1421,4 +1423,106 @@ textarea { resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   .splash-inner { animation: none; }
   .splash-meter .vegas-bar { animation: none; height: 60%; }
+}
+
+/* Duplicate finder in Settings → Backup */
+.dupe-block { border-color: color-mix(in oklab, var(--med) 45%, var(--line)); }
+.dupe-group { border-top: 1px solid var(--line); padding: 10px 0 4px; }
+.dupe-title { font-family: var(--font-small); font-size: 14px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.dupe-count { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: #fff; background: var(--med); border-radius: 9px; padding: 2px 7px; }
+.dupe-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.dupe-meta { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
+.dupe-del { flex: 0 0 auto; font-family: var(--font-small); font-size: 11.5px; font-weight: 600; color: var(--hi); background: none; border: 1px solid color-mix(in oklab, var(--hi) 35%, var(--line)); border-radius: 5px; padding: 5px 10px; cursor: pointer; }
+.dupe-del:hover { background: color-mix(in oklab, var(--hi) 10%, var(--surface)); }
+.row-repeat { font-size: 11px; }
+.dupe-row.bad { background: color-mix(in oklab, var(--hi) 7%, transparent); border-radius: 4px; padding-left: 6px; }
+.dupe-flag { color: var(--hi); }
+.dupe-ok { color: var(--r-nadir, #6CC056); }
+
+/* Archive tab */
+.arch-block { margin-bottom: 18px; }
+.arch-head { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-4); padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.arch-row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid color-mix(in oklab, var(--line) 55%, transparent); }
+.arch-row:last-child { border-bottom: none; }
+.arch-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; opacity: 0.55; }
+.arch-body { flex: 1; min-width: 0; }
+.arch-title { font-family: var(--font-small); font-size: 13.5px; font-weight: 600; color: var(--ink-2); text-decoration: line-through; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arch-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-4); margin-top: 2px; }
+.arch-restore { flex: 0 0 auto; font-family: var(--font-small); font-size: 12px; font-weight: 600; color: var(--accent); background: none; border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line)); border-radius: 5px; padding: 6px 11px; cursor: pointer; }
+.arch-restore:hover { background: color-mix(in oklab, var(--accent) 10%, var(--surface)); }
+.arch-more { font-family: var(--font-small); font-size: 11.5px; color: var(--ink-4); font-style: italic; padding: 8px 4px 0; }
+
+/* Archive is the safe, primary close-out action; Delete stays available but recedes. */
+.btn-archive { font-family: var(--font-small); font-size: 13px; font-weight: 700; color: #fff;
+  background: linear-gradient(to bottom, #2aa0b5, #177888); border: 1px solid #0f5563;
+  border-radius: 6px; padding: 10px 16px; cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), 0 1px 2px rgba(0,0,0,0.2); }
+.btn-archive:hover { filter: brightness(1.07); }
+/* Archive sits ON TOP of a much smaller delete — the safe action gets the weight,
+   the irreversible one is deliberately understated and spelled out in full. */
+.destructive-stack { display: flex; flex-direction: column; gap: 5px; align-items: stretch; margin-right: auto; }
+.destructive-stack .btn-archive { width: 100%; }
+.btn-delete-tiny { font-family: var(--font-small); font-size: 10.5px; font-weight: 600;
+  color: var(--ink-4); background: none; border: none; padding: 3px 4px; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; opacity: 0.7; white-space: nowrap; }
+.btn-delete-tiny:hover { color: var(--hi); opacity: 1; }
+.row-variants { color: var(--rail-ink-3, #8d8d8d); font-style: italic; }
+
+/* Theme kind + repeat shown in the theme view header, so you can always tell what
+   sort of theme you're looking at without opening the editor. */
+.tv-kind { margin-left: 9px; vertical-align: middle; }
+.tv-repeat { margin-left: 9px; font-family: var(--font-mono); font-size: 11px; font-weight: 400;
+  color: var(--ink-3); vertical-align: middle; white-space: nowrap; }
+
+/* Archive tab spacing: give rows a consistent gutter and stop the Restore button
+   crowding the right edge. */
+.settings-body .arch-block { padding-right: 2px; }
+.arch-restore { margin-left: 4px; }
+.arch-title { padding-right: 4px; }
+
+/* ---- Active role filter is visible, not silent ----
+   When a role is selected the app only shows that role's work. Without a cue that
+   reads as "my sessions vanished". So: unselected roles fade back, the selected one
+   stays full strength, and All Roles lights up as the way out. */
+.role-list.filtered .role-item-wrap:not(.active),
+.role-list.filtered .role-folder:not(.has-active) .role-item-wrap:not(.active) {
+  opacity: 0.42;
+  filter: saturate(0.5);
+  transition: opacity 0.16s ease, filter 0.16s ease;
+}
+.role-list.filtered .role-item-wrap:not(.active):hover { opacity: 0.75; filter: saturate(0.85); }
+
+/* The selected role earns a clear edge in its own colour */
+.role-item-wrap.active { box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), inset 3px 0 0 currentColor, 0 2px 5px rgba(0,0,0,0.4); }
+.role-list.filtered .role-item-wrap.active .role-item-main { color: #fff; font-weight: 700; }
+
+/* "All Roles" becomes the obvious way back to seeing everything */
+.role-list.filtered .role-item { color: var(--lcd); font-weight: 700; }
+.role-list.filtered .role-item::after {
+  content: "show all";
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+
+/* ---- Notes fields: roomy by default, and draggable bigger ----
+   Long notes were cramped in a 3-row box. These start taller and can be dragged
+   from the bottom-right corner in both directions. */
+.notes-field {
+  min-height: 130px;
+  resize: both;              /* both directions, not just vertical */
+  line-height: 1.55;
+  font-family: var(--font-small);
+  font-size: 13.5px;
+  max-width: 100%;           /* never drag wider than the modal */
+}
+.notes-field:focus { min-height: 170px; }  /* a little more room while writing */
+
+/* On a phone, corner-dragging is fiddly — keep it vertical-only and taller. */
+@media (max-width: 640px) {
+  .notes-field { resize: vertical; min-height: 150px; font-size: 16px; }
+  .notes-field:focus { min-height: 200px; }
 }

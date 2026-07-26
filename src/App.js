@@ -446,6 +446,30 @@ function App() {
   const [mobileDrawer, setMobileDrawer] = useState(null); // null | 'roles' | 'sessions' | 'themes'
   // Phase 2: mobile bottom-tab navigation. 'browse' = Roles & Themes, 'score', 'timeline', 'ask'
   const [mobileMenu, setMobileMenu] = useState(false);
+  // When a theme/session is opened FROM a drawer, remember it so closing returns you
+  // there instead of dumping you back to the calendar mid-review.
+  const [returnToDrawer, setReturnToDrawer] = useState(null);
+  function closeThemeView() {
+    const back = returnToDrawer;
+    setReturnToDrawer(null);
+    setViewingThemeId(null);
+    if (back) setMobileDrawer(back);
+  }
+  // Many places close the theme view (Edit details, Defer, Drop, scheduling a session…).
+  // Only the explicit close handlers above should return you to the drawer; every other
+  // exit must CLEAR the flag, or a stale one re-opens the drawer at a random later
+  // moment. The handlers consume the flag themselves, so anything still set here is stale.
+  useEffect(() => {
+    if (viewingThemeId == null && viewingSession == null && !showModal && returnToDrawer) {
+      setReturnToDrawer(null);
+    }
+  }, [viewingThemeId, viewingSession, showModal]); // eslint-disable-line react-hooks/exhaustive-deps
+  function closeSessionView() {
+    const back = returnToDrawer;
+    setReturnToDrawer(null);
+    setViewingSession(null);
+    if (back) setMobileDrawer(back);
+  }
   // Opening splash: shows only on a genuine app load (not on re-render), then fades.
   const [splash, setSplash] = useState(true);
   useEffect(() => {
@@ -643,10 +667,19 @@ function App() {
       // renders and spans. Fix any that already exist in saved data (from older bugs,
       // imports, or edits that skipped validation) rather than waiting for an edit.
       const repaired = parsed.map(task => {
-        if (task.startDate && task.endDate && task.endDate < task.startDate) {
-          return { ...task, endDate: task.startDate };
+        let t = task;
+        if (t.startDate && t.endDate && t.endDate < t.startDate) {
+          t = { ...t, endDate: t.startDate };
         }
-        return task;
+        // A theme is a timeless container; it can't have a clock time. If something
+        // saved a theme kind onto a TIMED item (Ask Cadence has done this, and older
+        // data too), it's really a session — strip the kind. This is the contradiction
+        // that made timed "themes" behave unpredictably.
+        const isThemeKind = t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+        if (isThemeKind && t.time) {
+          t = { ...t, kind: undefined };
+        }
+        return t;
       });
 
       const migrated = repaired.map(task => {
@@ -671,7 +704,17 @@ function App() {
     if (f) setUse24h(f === 'true');
     setLoaded(true);
   }, []);
-  useEffect(() => { if (loaded) localStorage.setItem('planner-tasks', JSON.stringify(tasks)); }, [tasks, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    // Belt-and-suspenders: a timed item is a session, never a theme. Enforce it on the
+    // way to storage so Ask Cadence, imports, or any code path can't persist the
+    // theme-with-a-time contradiction.
+    const clean = tasks.map(t => {
+      const isThemeKind = t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+      return (isThemeKind && t.time) ? { ...t, kind: undefined } : t;
+    });
+    localStorage.setItem('planner-tasks', JSON.stringify(clean));
+  }, [tasks, loaded]);
 
   // UNDO/REDO history capture
   useEffect(() => {
@@ -1846,6 +1889,22 @@ function App() {
     return tasks.filter(isThemeSlipped).sort(byPriority);
   }
 
+  // A session belongs in Unfinished Business when it has no time and isn't done —
+  // whether it was pushed from a past week (push strips the time) or simply never
+  // scheduled. It leaves the moment it gets a time or is marked complete. This mirrors
+  // how a weekly theme behaves: no time = waiting on you.
+  function untimedSessions() {
+    const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    return tasks
+      .filter(t => !isTheme(t) && !t.time && !t.allDay && !t.done && t.startDate)
+      .sort(byPriority);
+  }
+
+  // Everything needing a decision in the tray: slipped themes + untimed sessions.
+  function unfinishedItems() {
+    return [...slippedThemes(), ...untimedSessions()];
+  }
+
   // Resolve a slipped theme: close it, push it to the viewed week, or make it a project
   function resolveSlipped(themeId, action) {
     const viewedMonday = fmtInput(getMonday(new Date(fmtInput(currentWeekStart) + 'T00:00:00')));
@@ -2237,15 +2296,42 @@ function App() {
   // sessions that stand alone (not filed under a theme) — otherwise those are invisible.
   function roleContents(roleId) {
     const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    const hasRepeat = t => t.repeat && t.repeat.freq && t.repeat.freq !== 'none';
     const q = roleSearch.trim().toLowerCase();
     const match = t => !q || (t.title || '').toLowerCase().includes(q);
-    const themes = tasks.filter(t => t.role === roleId && isTheme(t) && !t.done && match(t));
-    const loose = tasks.filter(t => {
+
+    // Collapse by title. The same meeting shouldn't take several rows just because
+    // some weeks were moved to a different time, or because stray theme copies exist.
+    // Keep the best representative: a recurring series wins, then a theme, then any.
+    const collapse = (list) => {
+      const byTitle = {};
+      list.forEach(t => {
+        const key = (t.title || '').trim().toLowerCase() || `__id${t.id}`;
+        (byTitle[key] = byTitle[key] || []).push(t);
+      });
+      return Object.values(byTitle).map(group => {
+        if (group.length === 1) return { item: group[0], variants: 0 };
+        // Prefer the recurring series as the face of the group — it's the real pattern.
+        const series = group.find(hasRepeat);
+        const best = series || group.find(isTheme) || group[0];
+        return { item: best, variants: group.length - 1 };
+      });
+    };
+
+    const themeList = tasks.filter(t => t.role === roleId && isTheme(t) && !t.done && match(t));
+    const themes = collapse(themeList);
+    // Titles that already exist as a theme in this role. A loose session sharing one of
+    // those names is the same work — you'll find it by opening that theme, so it doesn't
+    // need its own row. Genuinely orphaned sessions (no theme, no matching name) DO stay,
+    // otherwise they'd be invisible in the Roles view entirely.
+    const themeTitles = new Set(themeList.map(t => (t.title || '').trim().toLowerCase()));
+    const loose = collapse(tasks.filter(t => {
       if (t.role !== roleId || isTheme(t) || t.done) return false;
       const tagged = (t.themeIds && t.themeIds.length > 0) || t.themeId != null;
       if (tagged || t.parentId != null) return false; // lives under a theme, shown there
+      if (themeTitles.has((t.title || '').trim().toLowerCase())) return false; // same work as a theme
       return match(t);
-    });
+    }));
     return { themes, loose };
   }
 
@@ -2725,7 +2811,7 @@ function App() {
               value={roleSearch} onChange={e => setRoleSearch(e.target.value)} />
           </div>
         )}
-        <div className="role-list">
+        <div className={`role-list${selectedRole !== 'all' ? ' filtered' : ''}`}>
           <button className={`role-item ${selectedRole==='all'?'active':''}`} onClick={() => setSelectedRole('all')} style={{borderLeftColor:'#999'}}>
             <span className="role-dot" style={{backgroundColor:'#999'}}></span> All Roles
           </button>
@@ -2757,26 +2843,43 @@ function App() {
                     {themes.length === 0 && loose.length === 0 && (
                       <div className="folder-empty">Nothing here yet.</div>
                     )}
-                    {themes.map(t => {
+                    {themes.map(({item: t, variants}) => {
                       const n = sessionsForTheme(t.id).length + unscheduledForTheme(t.id).length;
+                      const rep = describeRepeat(t);
                       return (
-                        <div key={t.id} className="theme-row" onClick={() => { setMobileDrawer(null); setViewingThemeId(t.id); }}>
+                        <div key={t.id} className="theme-row" onClick={() => { setReturnToDrawer('roles'); setMobileDrawer(null); setViewingThemeId(t.id); }}>
                           <span className={`theme-kind kind-${t.kind||'weekly'}`}>{t.kind||'weekly'}</span>
                           <div className="theme-body">
-                            <div className="theme-name">{t.title}</div>
-                            <div className="theme-sub">{n > 0 ? `${n} session${n>1?'s':''}` : 'no sessions yet'}</div>
+                            <div className="theme-name">
+                              {rep && <span className="row-repeat" title={rep}>🔁 </span>}
+                              {t.title}
+                            </div>
+                            <div className="theme-sub">
+                              {rep ? rep : (n > 0 ? `${n} session${n>1?'s':''}` : 'no sessions yet')}
+                              {variants > 0 && <span className="row-variants"> · +{variants} moved/copy</span>}
+                            </div>
                           </div>
                           <span className="theme-chevron">›</span>
                         </div>
                       );
                     })}
-                    {loose.map(s => (
-                      <div key={s.id} className="theme-row loose-row" onClick={() => { setMobileDrawer(null); openSessionView(s, s.startDate); }}>
+                    {loose.map(({item: s, variants}) => (
+                      <div key={s.id} className="theme-row loose-row" onClick={() => { setReturnToDrawer('roles'); setMobileDrawer(null); openSessionView(s, s.startDate); }}>
                         <span className="theme-kind kind-session">session</span>
                         <div className="theme-body">
-                          <div className="theme-name">{s.title}</div>
+                          <div className="theme-name">
+                            {s.repeat && s.repeat.freq && s.repeat.freq !== 'none' && <span className="row-repeat" title={`Repeats ${s.repeat.freq}`}>🔁 </span>}
+                            {s.title}
+                          </div>
                           <div className="theme-sub">
-                            {s.allDay ? 'all day' : s.time ? `${fmtTime(s.time, use24h)}${s.startDate ? ' · ' + new Date(s.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : ''}` : 'unscheduled'}
+                            {(() => {
+                              const rep = describeRepeat(s);
+                              const time = s.allDay ? 'all day' : s.time ? fmtTime(s.time, use24h) : null;
+                              if (rep) return `${rep}${time ? ', ' + time : ''}`;
+                              if (!time) return 'unscheduled';
+                              return `${time}${s.startDate ? ' · ' + parseLocalDate(s.startDate).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : ''}`;
+                            })()}
+                            {variants > 0 && <span className="row-variants"> · +{variants} moved</span>}
                           </div>
                         </div>
                         <span className="theme-chevron">›</span>
@@ -2886,14 +2989,17 @@ function App() {
             <div className="task-col-body">
               {(() => {
                 const slipped = slippedThemes();
-                if (slipped.length === 0) return null;
+                const untimed = untimedSessions();
+                const total = slipped.length + untimed.length;
+                if (total === 0) return null;
+                const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
                 return (
                   <div className="unfinished-tray">
                     <div className="unfinished-head">
                       <span className="unfinished-title">Unfinished Business</span>
-                      <span className="unfinished-count">{slipped.length}</span>
+                      <span className="unfinished-count">{total}</span>
                     </div>
-                    <div className="unfinished-sub">These slipped past their week. Close them out or move them forward.</div>
+                    <div className="unfinished-sub">Waiting on you — a theme that slipped its week, or a session with no time yet. Give it a slot or close it out.</div>
                     {slipped.map(t => (
                       <div key={t.id} className="unfinished-item" style={{borderLeftColor: roleColor(t.role)}}>
                         <div className="unfinished-item-title" onClick={() => setViewingThemeId(t.id)}>
@@ -2905,6 +3011,22 @@ function App() {
                           <button className="ub-btn close" onClick={() => resolveSlipped(t.id,'close')}>✓ Close out</button>
                           <button className="ub-btn push" onClick={() => setViewingThemeId(t.id)}>→ Decide now</button>
                           <button className="ub-btn project" onClick={() => resolveSlipped(t.id,'project')}>⇄ Make project</button>
+                        </div>
+                      </div>
+                    ))}
+                    {untimed.map(s => (
+                      <div key={s.id} className="unfinished-item unfinished-session" style={{borderLeftColor: roleColor(s.role)}}>
+                        <div className="unfinished-item-title" onClick={() => openEdit(s, s.startDate)}>
+                          <span className={`priority-label priority-${s.priority}`}>{s.priority}</span>
+                          🕓 {s.title}
+                        </div>
+                        <div className="unfinished-item-meta">
+                          session · no time yet{s.startDate ? ` · ${parseLocalDate(s.startDate).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : ''}
+                          {(() => { const th = (s.themeIds && s.themeIds[0]) ? tasks.find(t=>t.id===s.themeIds[0]) : null; return th ? ` · in ${th.title}` : ''; })()}
+                        </div>
+                        <div className="unfinished-actions">
+                          <button className="ub-btn push" onClick={() => openEdit(s, s.startDate)}>🕓 Give it a time</button>
+                          <button className="ub-btn close" onClick={() => setTasks(prev => prev.map(t => t.id === s.id ? { ...t, done: true } : t))}>✓ Close out</button>
                         </div>
                       </div>
                     ))}
@@ -3356,7 +3478,11 @@ function App() {
                 const isThemeDraft = formData.draftKind === 'theme';
                 const taggedToTheme = (formData.themeIds && formData.themeIds.length > 0) || formData.themeId != null;
                 const existingTheme = editingId && (() => { const o = tasks.find(t=>t.id===editingId); return o && (o.kind==='weekly'||o.kind==='project'||o.kind==='standing'); })();
-                const isTheme = (isThemeDraft || existingTheme) && !taggedToTheme && !formData.time && !formData.allDay;
+                // An EXISTING theme always gets its theme-only fields — some carry a stray
+                // time from earlier versions, and hiding the controls on those made it
+                // impossible to change Weekly → Project. A NEW draft still has to be
+                // untimed and untagged to count as a theme.
+                const isTheme = existingTheme || (isThemeDraft && !taggedToTheme && !formData.time && !formData.allDay);
                 if (!isTheme) return null;
                 return (
                 <div className="form-group theme-type-group">
@@ -3386,7 +3512,11 @@ function App() {
                 const isThemeDraft = formData.draftKind === 'theme';
                 const taggedToTheme = (formData.themeIds && formData.themeIds.length > 0) || formData.themeId != null;
                 const existingTheme = editingId && (() => { const o = tasks.find(t=>t.id===editingId); return o && (o.kind==='weekly'||o.kind==='project'||o.kind==='standing'); })();
-                const isTheme = (isThemeDraft || existingTheme) && !taggedToTheme && !formData.time && !formData.allDay;
+                // An EXISTING theme always gets its theme-only fields — some carry a stray
+                // time from earlier versions, and hiding the controls on those made it
+                // impossible to change Weekly → Project. A NEW draft still has to be
+                // untimed and untagged to count as a theme.
+                const isTheme = existingTheme || (isThemeDraft && !taggedToTheme && !formData.time && !formData.allDay);
                 if (!isTheme) return null;
                 return (
                 <div className="form-group done-toggle">
@@ -3409,6 +3539,16 @@ function App() {
                   All day (claims the whole day with no set time; the Conductor asks before booking over it. Check Background for a passive backdrop like a trip or holiday.)
                 </label>
               </div>
+              {/* Session-only scheduling. A theme uses its own "Starts/Ends (week of)"
+                  range above; showing these session date/time fields too gave a theme
+                  TWO sets of dates. Hide them when editing a theme. */}
+              {(() => {
+                const o = editingId ? tasks.find(t => t.id === editingId) : null;
+                const editingTheme = o && (o.kind === 'weekly' || o.kind === 'project' || o.kind === 'standing');
+                const draftTheme = formData.draftKind === 'theme';
+                if (editingTheme || draftTheme) return null;
+                return (
+                <>
               <div className="form-row">
                 <div className="form-group"><label>Start Date <span className="field-hint-inline">(leave blank for unscheduled)</span></label>
                   <input type="date" value={formData.startDate} onChange={e => {
@@ -3461,6 +3601,11 @@ function App() {
                 </div>
               </div>
               <div className="form-group"><label>Duration (minutes, alternative to end time)</label><input type="number" value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value, endTime: e.target.value ? '' : formData.endTime})} placeholder="e.g. 90"/></div>
+              </>
+              )}
+                </>
+                );
+              })()}
               <div className="form-group loc-group">
                 <label>Location (optional)</label>
                 <input type="text" value={formData.location}
@@ -3478,10 +3623,8 @@ function App() {
                   </div>
                 )}
               </div>
-              </>
-              )}
               <div className="form-group"><label>Tags (comma-separated)</label><input type="text" value={formData.tags} onChange={e => setFormData({...formData,tags:e.target.value})} placeholder="release, urgent"/></div>
-              <div className="form-group"><label>Notes <span className="field-hint-inline">**bold** *italic* &nbsp;- bullet&nbsp; 1. numbered</span></label><textarea value={formData.notes} onChange={e => setFormData({...formData,notes:e.target.value})} rows="3"/></div>
+              <div className="form-group"><label>Notes <span className="field-hint-inline">**bold** *italic* &nbsp;- bullet&nbsp; 1. numbered</span></label><textarea className="notes-field" value={formData.notes} onChange={e => setFormData({...formData,notes:e.target.value})} rows="7" placeholder="Longer notes go here — drag the bottom corner to make this bigger."/></div>
               <div className="form-group">
                 <label>Resources</label>
                 {/* attached library references */}
@@ -3646,7 +3789,27 @@ function App() {
                 )}
               </div>
               <div className="modal-actions">
-                {editingId && <button type="button" className="btn-danger" onClick={requestDelete}>Delete</button>}
+                {editingId && (
+                  <div className="destructive-stack">
+                    <button type="button" className="btn-archive" title="Keep it, but hide it from active views (find it in Settings → Archive)"
+                      onClick={() => {
+                        setTasks(prev => prev.map(t => t.id === editingId ? { ...t, done: true } : t));
+                        setShowModal(false);
+                        setEditingOccurrenceDate(null);
+                      }}>Archive</button>
+                    <button type="button" className="btn-delete-tiny"
+                      onClick={() => {
+                        const t = tasks.find(x => x.id === editingId);
+                        const isSeries = t && t.repeat && t.repeat.freq && t.repeat.freq !== 'none';
+                        // A recurring series routes through the scope prompt (this / all).
+                        if (isSeries && editingOccurrenceDate) { requestDelete(); return; }
+                        const msg = `Permanently delete “${t ? t.title : 'this session'}”?\n\n`
+                          + (isSeries ? 'This removes the ENTIRE recurring series.\n\n' : '')
+                          + `This CANNOT be undone. If you just want it out of the way, use Archive instead — it keeps everything and you can restore it later.`;
+                        if (window.confirm(msg)) requestDelete();
+                      }}>Delete permanently</button>
+                  </div>
+                )}
                 <button type="button" className="btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
                 <button type="submit" className="btn-primary" style={{width:'auto'}}>Save</button>
               </div>
@@ -3665,7 +3828,7 @@ function App() {
             </div>
 
             <div className="settings-tabs">
-              {[['roles','Roles'],['display','Display'],['clock','World Clock'],['profile','Profile'],['backup','Backup']].map(([k,lbl]) => (
+              {[['roles','Roles'],['display','Display'],['clock','World Clock'],['profile','Profile'],['archive','Archive'],['backup','Backup']].map(([k,lbl]) => (
                 <button key={k} className={`settings-tab${settingsTab===k?' on':''}`} onClick={() => setSettingsTab(k)}>{lbl}</button>
               ))}
             </div>
@@ -3781,8 +3944,130 @@ function App() {
                 </div>
               )}
 
+              {settingsTab === 'archive' && (
+                <div className="settings-group">
+                  <label className="settings-label">Archive</label>
+                  <div className="backup-intro">
+                    Completed themes and sessions. They're kept, not deleted — hidden from
+                    your active views but here whenever you want to look back or bring one
+                    returning. Storage isn't a concern: a thousand archived items is well
+                    under a megabyte.
+                  </div>
+                  {(() => {
+                    const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+                    const archived = tasks.filter(t => t.done);
+                    if (archived.length === 0) {
+                      return <div className="settings-placeholder">Nothing archived yet. Mark a theme or session complete and it'll appear here.</div>;
+                    }
+                    const themes = archived.filter(isTheme);
+                    const sessions = archived.filter(t => !isTheme(t));
+                    const row = (t) => (
+                      <div key={t.id} className="arch-row">
+                        <span className="arch-dot" style={{background: roleColor(t.role)}}></span>
+                        <div className="arch-body">
+                          <div className="arch-title">{t.title}</div>
+                          <div className="arch-meta">
+                            {isTheme(t) ? (t.kind || 'theme') : 'session'}
+                            {t.startDate ? ` · ${parseLocalDate(t.startDate).toLocaleDateString('en-US',{month:'short', day:'numeric', year:'numeric'})}` : ''}
+                            {t.time ? ` · ${fmtTime(t.time, use24h)}` : ''}
+                          </div>
+                        </div>
+                        <button className="arch-restore" title="Bring this back into your active views"
+                          onClick={() => setTasks(prev => prev.map(x => x.id === t.id ? { ...x, done: false } : x))}>
+                          Restore
+                        </button>
+                      </div>
+                    );
+                    return (
+                      <>
+                        {themes.length > 0 && (
+                          <div className="arch-block">
+                            <div className="arch-head">Themes ({themes.length})</div>
+                            {themes.map(row)}
+                          </div>
+                        )}
+                        {sessions.length > 0 && (
+                          <div className="arch-block">
+                            <div className="arch-head">Sessions ({sessions.length})</div>
+                            {sessions.slice(0, 60).map(row)}
+                            {sessions.length > 60 && (
+                              <div className="arch-more">Showing 60 of {sessions.length}. Older ones stay in your data and in every export.</div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+
               {settingsTab === 'backup' && (
                 <div className="settings-group">
+                  {(() => {
+                    // Group by title to surface duplicates — but a recurring series and
+                    // its intentionally-moved occurrences are NOT duplicates. Editing one
+                    // occurrence correctly creates a standalone (repeat:null) and adds the
+                    // date to the master's skipDates. So only flag copies that look wrong:
+                    // items that are BOTH a theme kind AND recurring (contradictory), or
+                    // extra theme-kind copies of the same title.
+                    const groups = {};
+                    tasks.filter(t => !t.done).forEach(t => {
+                      const key = (t.title || '').trim().toLowerCase();
+                      if (!key) return;
+                      (groups[key] = groups[key] || []).push(t);
+                    });
+                    const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+                    const hasRepeat = t => t.repeat && t.repeat.freq && t.repeat.freq !== 'none';
+                    const suspicious = (list) => {
+                      // A theme that also repeats is contradictory — a container can't recur.
+                      const contradictory = list.filter(t => isTheme(t) && hasRepeat(t));
+                      // More than one theme with the same title is a real duplicate.
+                      const themeCopies = list.filter(isTheme);
+                      return contradictory.length > 0 || themeCopies.length > 1;
+                    };
+                    const dupes = Object.entries(groups).filter(([,list]) => list.length > 1 && suspicious(list));
+                    if (dupes.length === 0) return null;
+                    return (
+                      <div className="backup-block dupe-block">
+                        <div className="backup-block-head">Needs a look</div>
+                        <div className="backup-block-body">
+                          These titles have copies that look wrong — usually a theme that also
+                          carries a repeat rule (a container can't recur), or several themes
+                          with the same name. <strong>Moved occurrences of a recurring session
+                          are normal</strong> and are marked below, don't delete those.
+                        </div>
+                        {dupes.map(([key, list]) => (
+                          <div key={key} className="dupe-group">
+                            <div className="dupe-title">{list[0].title} <span className="dupe-count">{list.length}</span></div>
+                            {list.map(t => {
+                              const th = isTheme(t);
+                              const rep = hasRepeat(t) ? t.repeat.freq : null;
+                              const contradictory = th && rep;
+                              const movedOcc = !th && !rep && t.time; // a spun-off single occurrence
+                              return (
+                                <div key={t.id} className={`dupe-row${contradictory ? ' bad' : ''}`}>
+                                  <span className="dupe-meta">
+                                    {th ? `theme (${t.kind})` : 'session'}
+                                    {t.time ? ` · ${fmtTime(t.time, use24h)}` : t.allDay ? ' · all day' : ' · no time'}
+                                    {t.startDate ? ` · ${t.startDate}` : ''}
+                                    {rep ? ` · repeats ${rep}` : ''}
+                                    {contradictory && <strong className="dupe-flag"> ← theme + repeat</strong>}
+                                    {movedOcc && <span className="dupe-ok"> ← moved occurrence, keep</span>}
+                                  </span>
+                                  <button className="dupe-del" title="Delete this copy"
+                                    onClick={() => {
+                                      if (window.confirm(`Delete this copy of “${t.title}”?\n\n${th ? 'Theme' : 'Session'}${t.startDate ? ' · ' + t.startDate : ''}${rep ? ' · repeats ' + rep : ''}\n\nThis can't be undone (export first if unsure).`)) {
+                                        setTasks(prev => prev.filter(x => x.id !== t.id));
+                                      }
+                                    }}>Delete</button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <label className="settings-label">Backup & transfer</label>
                   <div className="backup-intro">
                     Cadence stores everything on this device only. Export a file to keep a
@@ -4037,10 +4322,17 @@ function App() {
         const upcoming = sessions.filter(s => !s.done && (s.endDate||s.startDate) >= todayStr);
         const past = sessions.filter(s => s.done || (s.endDate||s.startDate) < todayStr);
         return (
-          <div className="modal-overlay" onClick={() => setViewingThemeId(null)}>
+          <div className="modal-overlay" onClick={closeThemeView}>
             <div className="modal-content theme-view" onClick={e => e.stopPropagation()}>
-              <button className="modal-close" onClick={() => setViewingThemeId(null)}>×</button>
-              <h2 className="modal-header"><span className="role-dot" style={{backgroundColor: roleColor(theme.role), marginRight:8}}></span>{theme.title}</h2>
+              <button className="modal-close" onClick={closeThemeView}>×</button>
+              <h2 className="modal-header">
+                <span className="role-dot" style={{backgroundColor: roleColor(theme.role), marginRight:8}}></span>
+                {theme.title}
+                <span className={`theme-kind-badge tv-kind kind-${theme.kind||'weekly'}`} title="Theme type — change it in Edit theme details">
+                  {theme.kind || 'weekly'}
+                </span>
+                {describeRepeat(theme) && <span className="tv-repeat">🔁 {describeRepeat(theme)}</span>}
+              </h2>
               {(() => {
                 const roleIds = [...new Set([theme.role, ...sessions.map(s => s.role)])].filter(Boolean);
                 if (roleIds.length <= 1) return null;
@@ -4118,7 +4410,7 @@ function App() {
               <div className="form-group">
                 <label>Description {theme.notes && !editingThemeDesc && <button className="link-btn desc-edit" onClick={() => setEditingThemeDesc(true)}>Edit</button>}</label>
                 {editingThemeDesc || !theme.notes ? (
-                  <textarea rows="3" value={theme.notes || ''} placeholder="What is this theme about? Goals, scope, links…"
+                  <textarea className="notes-field" rows="6" value={theme.notes || ''} placeholder="What is this theme about? Goals, scope, links…"
                     autoFocus={editingThemeDesc}
                     onBlur={() => setEditingThemeDesc(false)}
                     onChange={e => setTasks(tasks.map(t => t.id === theme.id ? {...t, notes: e.target.value} : t))} />
@@ -4168,7 +4460,7 @@ function App() {
                     <input type="checkbox" checked={!!s.done} onClick={e=>e.stopPropagation()} onChange={e => { e.stopPropagation(); setTasks(tasks.map(t => t.id===s.id ? {...t, done: e.target.checked} : t)); }} />
                     <div className="theme-session-main">
                       <div className="theme-session-title"><span className="session-role-dot" style={{background: roleColor(s.role)}} title={roleLabel(s.role)}></span>{s.title}</div>
-                      <div className="theme-session-when">{new Date(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}{(() => { const p = s.parentId && s.parentId !== theme.id ? tasks.find(t=>t.id===s.parentId) : null; return p ? <span className="session-under"> · under {p.title}</span> : null; })()}</div>
+                      <div className="theme-session-when">{parseLocalDate(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}{(() => { const p = s.parentId && s.parentId !== theme.id ? tasks.find(t=>t.id===s.parentId) : null; return p ? <span className="session-under"> · under {p.title}</span> : null; })()}</div>
                       {s.links && <div className="session-row-links">{linkifyNotes(Array.isArray(s.links) ? s.links.join('  ') : s.links)}</div>}
                       {s.location && <div className="session-row-loc">📍 {linkifyNotes(s.location)}</div>}
                     </div>
@@ -4181,7 +4473,7 @@ function App() {
                     <input type="checkbox" checked={!!s.done} onClick={e=>e.stopPropagation()} onChange={e => { e.stopPropagation(); setTasks(tasks.map(t => t.id===s.id ? {...t, done: e.target.checked} : t)); }} />
                     <div className="theme-session-main">
                       <div className="theme-session-title"><span className="session-role-dot" style={{background: roleColor(s.role)}} title={roleLabel(s.role)}></span>{s.title}</div>
-                      <div className="theme-session-when">{new Date(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}</div>
+                      <div className="theme-session-when">{parseLocalDate(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}</div>
                     </div>
                   </div>
                 ))}
@@ -4192,23 +4484,32 @@ function App() {
               </div>
 
               <div className="modal-actions theme-view-actions">
-                <button className="btn-danger" onClick={() => {
-                  const linked = sessionsForTheme(theme.id);
-                  const msg = linked.length > 0
-                    ? `Delete “${theme.title}”? It has ${linked.length} session${linked.length>1?'s':''} attached. The theme will be removed; its sessions will stay on your calendar but lose the theme tag.`
-                    : `Delete “${theme.title}”? This removes the theme.`;
-                  if (window.confirm(msg)) {
-                    setTasks(prev => prev
-                      .filter(t => t.id !== theme.id)
-                      .map(t => {
-                        const ids = t.themeIds || (t.themeId ? [t.themeId] : []);
-                        if (ids.includes(theme.id)) return { ...t, themeIds: ids.filter(id => id !== theme.id), themeId: undefined };
-                        return t;
-                      }));
-                    setIntentions(prev => prev.filter(i => i.themeId !== theme.id));
-                    setViewingThemeId(null);
-                  }
-                }}>Delete</button>
+                <div className="destructive-stack">
+                  <button className="btn-archive" title="Keep it, but close it out (find it in Settings → Archive)"
+                    onClick={() => {
+                      setTasks(prev => prev.map(t => t.id === theme.id ? { ...t, done: true } : t));
+                      closeThemeView();
+                    }}>Archive</button>
+                  <button className="btn-delete-tiny" onClick={() => {
+                    const linked = sessionsForTheme(theme.id);
+                    const msg = `Permanently delete “${theme.title}”?\n\n`
+                      + (linked.length > 0
+                        ? `It has ${linked.length} session${linked.length>1?'s':''} attached. Those sessions stay on your calendar but lose their theme tag.\n\n`
+                        : '')
+                      + `This CANNOT be undone. If you just want it out of the way, use Archive instead — it keeps everything and you can restore it later.`;
+                    if (window.confirm(msg)) {
+                      setTasks(prev => prev
+                        .filter(t => t.id !== theme.id)
+                        .map(t => {
+                          const ids = t.themeIds || (t.themeId ? [t.themeId] : []);
+                          if (ids.includes(theme.id)) return { ...t, themeIds: ids.filter(id => id !== theme.id), themeId: undefined };
+                          return t;
+                        }));
+                      setIntentions(prev => prev.filter(i => i.themeId !== theme.id));
+                      setViewingThemeId(null);
+                    }
+                  }}>Delete permanently</button>
+                </div>
                 <button className="btn-secondary" onClick={() => { const th = tasks.find(t=>t.id===viewingThemeId); setViewingThemeId(null); openEdit(th); }}>Edit theme details</button>
                 <button className="btn-secondary" onClick={() => setViewingThemeId(null)}>Cancel</button>
                 <button className="btn-primary" style={{width:'auto'}} onClick={() => setViewingThemeId(null)}>Save</button>
@@ -4219,7 +4520,7 @@ function App() {
                   <div className="intend-chips">
                     {intentions.filter(i => i.themeId === theme.id).sort((a,b)=>a.date.localeCompare(b.date)).map(i => (
                       <span key={i.date} className="intend-chip">
-                        {new Date(i.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}
+                        {parseLocalDate(i.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}
                         <button type="button" className="intend-chip-x" onClick={() => removeIntention(theme.id, i.date)}>×</button>
                       </span>
                     ))}
@@ -4347,7 +4648,7 @@ function App() {
                       <input type="checkbox" checked={!!s.done} onClick={e=>e.stopPropagation()} onChange={e=>{ e.stopPropagation(); setTasks(tasks.map(t=>t.id===s.id?{...t,done:e.target.checked}:t)); }} />
                       <div className="theme-session-main">
                         <div className="theme-session-title"><span className="session-role-dot" style={{background: roleColor(s.role)}}></span>{s.title}</div>
-                        <div className="theme-session-when">{new Date(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}</div>
+                        <div className="theme-session-when">{parseLocalDate(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}</div>
                       </div>
                     </div>
                   ))}
@@ -4421,14 +4722,14 @@ function App() {
         const refRes = (t.resourceRefs || []).map(r => resolveResourceRef(r));
         const endLabel = t.endTime ? fmtTime(t.endTime, use24h) : (t.duration ? fmtTime(minToHHMM(toMinutes(t.time) + parseInt(t.duration,10)), use24h) : '');
         return (
-          <div className="modal-overlay" onClick={() => setViewingSession(null)}>
+          <div className="modal-overlay" onClick={closeSessionView}>
             <div className="modal-content session-view" onClick={e => e.stopPropagation()} style={{borderTop: `4px solid ${roleColor(t.role)}`}}>
               <div className="sv-head">
                 <div className="sv-titlewrap">
                   <span className="sv-role-dot" style={{background: roleColor(t.role)}}></span>
                   <h2 className="sv-title">{t.title}</h2>
                 </div>
-                <button className="sv-close" onClick={() => setViewingSession(null)}>×</button>
+                <button className="sv-close" onClick={closeSessionView}>×</button>
               </div>
 
               <div className="sv-when">
@@ -4509,7 +4810,7 @@ function App() {
                   setTasks(prev => prev.map(x => x.id === t.id ? { ...x, done: !x.done } : x));
                   setViewingSession(vs => vs ? { ...vs, task: { ...vs.task, done: !vs.task.done } } : vs);
                 }}>{t.done ? '↺ Mark not done' : '✓ Mark done'}</button>
-                <button className="btn-secondary" onClick={() => setViewingSession(null)}>Close</button>
+                <button className="btn-secondary" onClick={closeSessionView}>Close</button>
               </div>
             </div>
           </div>
@@ -4635,6 +4936,31 @@ function chipTooltip(t, use24h) {
   return lines.join('\n');
 }
 
+// Describe a repeat rule in plain language: "Weekly on Thu", "Mon–Thu", "Daily",
+// "Every 2 weeks on Tue". Recurring items should read as a PATTERN, not a start date.
+const DOW_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function describeRepeat(task) {
+  const r = task && task.repeat;
+  if (!r || !r.freq || r.freq === 'none') return null;
+  const every = r.interval && r.interval > 1 ? `Every ${r.interval} ` : '';
+  if (r.freq === 'daily') return every ? `${every}days` : 'Daily';
+  if (r.freq === 'weekly') {
+    const days = (r.weekdays && r.weekdays.length)
+      ? r.weekdays.slice().sort((a,b)=>a-b)
+      : (task.startDate ? [new Date(task.startDate + 'T00:00:00').getDay()] : []);
+    if (!days.length) return every ? `${every}weeks` : 'Weekly';
+    // Contiguous runs read better as a range: Mon–Thu rather than Mon, Tue, Wed, Thu
+    const contiguous = days.length > 2 && days.every((d,i) => i === 0 || d === days[i-1] + 1);
+    const label = contiguous
+      ? `${DOW_SHORT[days[0]]}–${DOW_SHORT[days[days.length-1]]}`
+      : days.map(d => DOW_SHORT[d]).join(', ');
+    return every ? `${every}weeks on ${label}` : `Weekly on ${label}`;
+  }
+  if (r.freq === 'monthly') return every ? `${every}months` : 'Monthly';
+  if (r.freq === 'yearly') return every ? `${every}years` : 'Yearly';
+  return null;
+}
+
 function TaskChip({ t, color, use24h, onDragStart, onClick }) {
   return (
     <div className="task-chip" style={{borderLeftColor: color}}
@@ -4649,11 +4975,18 @@ function TaskChip({ t, color, use24h, onDragStart, onClick }) {
         </span>
       </div>
       <div className="task-chip-title">{t.title}</div>
-      {t.startDate && (
-        <div className="task-chip-date">
-          {new Date(t.startDate + 'T00:00:00').toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'})}
-        </div>
-      )}
+      {(() => {
+        // A recurring session should read as its PATTERN ("Weekly on Thu"), not the
+        // date the series happened to start — that date is meaningless at a glance.
+        const rep = describeRepeat(t);
+        if (rep) return <div className="task-chip-date task-chip-rep">🔁 {rep}</div>;
+        if (t.startDate) return (
+          <div className="task-chip-date">
+            {new Date(t.startDate + 'T00:00:00').toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'})}
+          </div>
+        );
+        return null;
+      })()}
     </div>
   );
 }
