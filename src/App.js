@@ -2245,7 +2245,11 @@ function App() {
             <div key={h} className="m-tl-hourrow" style={{height: HOUR_H}}
               onClick={() => openModalAt(dateStr, h, h*60)}>
               <div className="m-tl-hourlb">{h===0?'12a':h<12?`${h}a`:h===12?'12p':`${h-12}p`}</div>
-              <div className="m-tl-slot"></div>
+              <div className="m-tl-slot">
+                {gridSnap < 60 && (
+                  <div className="m-tl-subgrid" style={{ backgroundSize: `100% ${(gridSnap/60)*HOUR_H}px` }}></div>
+                )}
+              </div>
             </div>
           ))}
 
@@ -2540,7 +2544,7 @@ function App() {
                           style={{ left, width, top, height: LANE_H-20,
                             '--role': role.color,
                             borderLeft: `4px solid ${role.color}`,
-                            background: s.isBackground ? undefined : `color-mix(in oklab, ${role.color} 20%, #fff)` }}
+                            background: s.isBackground ? undefined : `linear-gradient(to bottom, color-mix(in oklab, ${role.color} 32%, #fff), color-mix(in oklab, ${role.color} 20%, #fff))` }}
                           draggable
                           onDragStart={(e)=>{ setHoverTip(null); handleDragStart(e,s,dateStr); }}
                           onMouseDown={()=> setHoverTip(null)}

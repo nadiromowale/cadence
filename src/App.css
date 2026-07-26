@@ -449,7 +449,14 @@ textarea { resize: vertical; }
 .msr-btn.rec.armed .rec-dot { background: var(--hi); border-color: var(--hi); box-shadow: 0 0 5px var(--hi); }
 
 /* SESSION BLOCK — single-box style, shared feel with Score .event */
-.clip { position: absolute; border-left: 4px solid; border-radius: 3px; padding: 3px 6px; overflow: hidden; cursor: grab; box-shadow: 0 1px 3px rgba(16,22,30,0.2); outline: 1px solid rgba(255,255,255,0.6); }
+.clip { position: absolute; border-left: 4px solid; border-radius: 4px; padding: 3px 6px; overflow: hidden; cursor: grab;
+  background: linear-gradient(to bottom,
+    color-mix(in oklab, var(--role) 30%, var(--surface)),
+    color-mix(in oklab, var(--role) 20%, var(--surface)));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55),
+              inset 0 -1px 2px rgba(0,0,0,0.08),
+              0 1px 3px rgba(16,22,30,0.22);
+  outline: 1px solid color-mix(in oklab, var(--role) 32%, rgba(255,255,255,0.6)); }
 .clip:hover { overflow: visible; z-index: 60; }
 .clip:active { cursor: grabbing; }
 .clip .clip-title { font-family: var(--font-small); font-size: var(--chip-fs); font-weight: 600; color: var(--ink); line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
@@ -1248,7 +1255,11 @@ textarea { resize: vertical; }
   .m-day-today .m-day-dow { color: rgba(255,255,255,0.85); }
   .m-day-today .m-day-date { color: #fff; }
   .m-day-today .m-day-count { color: rgba(255,255,255,0.8); }
-  .m-day-items { padding: 7px 2px 0; }
+  /* Each day's sessions sit in a subtly inset panel — gives the flat agenda the
+     tonal depth the desktop grid gets from its striped columns. */
+  .m-day-items { padding: 8px 8px 4px; margin-top: 4px; border-radius: 6px;
+    background: color-mix(in oklab, var(--sunken) 40%, var(--paper));
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); }
   .m-day-empty { font-family: var(--font-small); font-size: 12.5px; color: var(--ink-4); font-style: italic; padding: 8px 12px; }
 
   /* All-day / background claim banner */
@@ -1259,9 +1270,15 @@ textarea { resize: vertical; }
   .m-claim-sub { font-family: var(--font-small); font-size: calc(var(--micro-fs, 10px) + 2px); color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 1px; }
 
   /* A session row */
-  .m-sess { display: flex; gap: 11px; margin: 6px 0; padding: 12px 13px; border-radius: 4px; cursor: pointer;
-    background: color-mix(in oklab, var(--role) 12%, var(--surface));
-    border-left: 3px solid var(--role); }
+  .m-sess { display: flex; gap: 11px; margin: 7px 0; padding: 12px 13px; border-radius: 5px; cursor: pointer;
+    background: linear-gradient(to bottom,
+      color-mix(in oklab, var(--role) 26%, #fff),
+      color-mix(in oklab, var(--role) 18%, #fff));
+    border-left: 6px solid var(--role);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.55),
+                inset 0 -1px 2px rgba(0,0,0,0.08),
+                0 1px 3px rgba(16,22,30,0.22);
+    outline: 1px solid color-mix(in oklab, var(--role) 30%, transparent); }
   .m-sess:active { background: color-mix(in oklab, var(--role) 22%, var(--surface)); }
   .m-sess-bg { background: color-mix(in oklab, var(--role) 7%, var(--surface)); border-left-color: color-mix(in oklab, var(--role) 55%, transparent); }
   .m-sess-done { opacity: 0.5; }
@@ -1278,7 +1295,7 @@ textarea { resize: vertical; }
   .m-pri-low { background: transparent; border: 1px solid var(--ink-4); }
 
   /* ---- PHASE 4: mobile Timeline (vertical day grid) ---- */
-  .m-tl { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--paper); }
+  .m-tl { flex: 1; display: flex; flex-direction: column; min-height: 0; background: color-mix(in oklab, var(--sunken) 55%, var(--paper-2)); }
   .m-tl-daybar { display: flex; align-items: center; gap: 10px; padding: 10px 12px 9px; flex-shrink: 0;
     background: #606060; border-bottom: 1px solid var(--chrome-line); }
   .m-tl-nav { width: 34px; height: 34px; border-radius: 8px; flex: 0 0 auto; font-size: 17px; color: var(--rail-ink);
@@ -1301,14 +1318,23 @@ textarea { resize: vertical; }
   .m-tl-hourrow { display: flex; position: relative; }
   .m-tl-hourlb { flex: 0 0 52px; font-family: var(--font-mono); font-size: 12px; color: var(--ink-3);
     padding: 2px 6px 0 0; text-align: right; }
-  .m-tl-slot { flex: 1; border-top: 1px solid var(--sunken); position: relative; background: var(--lane-a); }
+  .m-tl-slot { flex: 1; border-top: 1px solid #B9A57F; position: relative; background: var(--lane-a); }
   .m-tl-hourrow:nth-child(even) .m-tl-slot { background: var(--lane-b); }
-  .m-tl-slot::after { content: ""; position: absolute; left: 0; right: 0; top: 50%;
-    border-top: 1px dashed color-mix(in oklab, var(--sunken) 70%, transparent); }
+  /* Sub-hour gridlines, driven by the GRID control (15/30/60m) exactly like desktop.
+     backgroundSize is set inline from gridSnap; at 60m there's no overlay (hour line only). */
+  .m-tl-subgrid { position: absolute; inset: 0; pointer-events: none;
+    background-image: linear-gradient(to bottom, #C9B491 0, #C9B491 1px, transparent 1px);
+    background-repeat: repeat-y; }
 
-  .m-tl-clip { position: absolute; border-radius: 4px; padding: 6px 9px; overflow: hidden; cursor: pointer; z-index: 4;
-    background: color-mix(in oklab, var(--role) 20%, var(--surface));
-    border-left: 3px solid var(--role); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+  .m-tl-clip { position: absolute; border-radius: 5px; padding: 6px 9px; overflow: hidden; cursor: pointer; z-index: 4;
+    background: linear-gradient(to bottom,
+      color-mix(in oklab, var(--role) 28%, #fff),
+      color-mix(in oklab, var(--role) 20%, #fff));
+    border-left: 6px solid var(--role);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.5),
+                inset 0 -1px 2px rgba(0,0,0,0.08),
+                0 1px 3px rgba(16,22,30,0.22);
+    outline: 1px solid color-mix(in oklab, var(--role) 32%, transparent); }
   /* Background sessions sit BEHIND (lower z), striped + dashed like desktop, spanning
      full width so a sliver peeks out on each side of the foreground clips. */
   .m-tl-clip.bg { z-index: 2; border-style: dashed;
