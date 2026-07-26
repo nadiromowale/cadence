@@ -471,8 +471,17 @@ function App() {
     if (back) setMobileDrawer(back);
   }
   // Opening splash: shows only on a genuine app load (not on re-render), then fades.
-  const [splash, setSplash] = useState(true);
+  // The CSS splash is for the BROWSER, where there's no native launch screen. When
+  // installed to the home screen, Android already shows a native splash (the icon on the
+  // manifest background) before React loads — so our splash would be a redundant second
+  // screen. Detect standalone (installed) mode and skip ours there.
+  const isStandalone = typeof window !== 'undefined' && (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true // iOS
+  );
+  const [splash, setSplash] = useState(!isStandalone);
   useEffect(() => {
+    if (isStandalone) return; // no CSS splash in the installed app
     const hold = setTimeout(() => setSplash(false), 2100); // hold, then fade
     return () => clearTimeout(hold);
   }, []);
