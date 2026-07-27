@@ -1149,15 +1149,29 @@ function App() {
       if (intn.date !== dateStr) return;
       if (!map[intn.themeId]) map[intn.themeId] = { hasSession: false, anyForeground: false };
     });
-    return Object.keys(map).map(id => {
+    const result = Object.keys(map).map(id => {
       const theme = tasks.find(t => t.id === Number(id) || t.id === id);
       const info = map[id];
-      let state;
-      if (!info.hasSession) state = 'intended';
-      else if (!info.anyForeground) state = 'background';
-      else state = 'committed';
+      // A theme in the themes lane shows at full strength. Whether its sessions happen to
+      // be "background" (ambient) is a property of the SESSION, not the theme — it should
+      // not fade the theme here. Only "no session yet" stays visually distinct (intended).
+      let state = info.hasSession ? 'committed' : 'intended';
       return theme && !theme.done ? { theme, state } : null;
     }).filter(Boolean);
+
+    // All-day items ARE day-themes (a trip, a holiday — no clock time, so by definition
+    // a theme for that day). They render right here in the themes lane, spanning the days
+    // they cover, instead of in a separate all-day strip.
+    tasks.forEach(t => {
+      if (!t.allDay || t.done) return;
+      if (!isRoleSelected(t.role) || !searchMatch(t)) return;
+      const start = t.startDate;
+      const end = t.endDate || t.startDate;
+      if (start && end && dateStr >= start && dateStr <= end) {
+        result.push({ theme: t, state: 'allday' });
+      }
+    });
+    return result;
   }
 
   function minToHHMM(m) { const h=Math.floor(m/60)%24; const mm=m%60; return `${String(h).padStart(2,'0')}:${String(mm).padStart(2,'0')}`; }
@@ -3117,11 +3131,13 @@ function App() {
                               className={`band-theme band-theme-${state}${theme.priority==='high'?' band-theme-high':''}`}
                               style={state === 'committed'
                                 ? { background: roleColor(theme.role)+'22', borderLeft: `3px solid ${roleColor(theme.role)}` }
+                                : state === 'allday'
+                                ? { background: roleColor(theme.role)+'2e', borderLeft: `3px solid ${roleColor(theme.role)}` }
                                 : state === 'intended'
                                 ? { borderLeft: `3px dashed ${roleColor(theme.role)}`, background: roleColor(theme.role)+'0c' }
                                 : { borderLeft: `2px solid ${roleColor(theme.role)}88` }}
                               onClick={(ev) => { ev.stopPropagation(); setHoverTip(null); setViewingThemeId(theme.id); }}
-                              onMouseEnter={(ev)=> setHoverTip({ x: ev.clientX, y: ev.clientY, title: theme.title, time: `${roleLabel(theme.role)} · ${state === 'intended' ? 'Intended — no session yet' : state === 'background' ? 'Background theme' : 'Committed today'}`, notes: theme.notes, color: roleColor(theme.role) })}
+                              onMouseEnter={(ev)=> setHoverTip({ x: ev.clientX, y: ev.clientY, title: theme.title, time: `${roleLabel(theme.role)} · ${state === 'allday' ? 'All day' : state === 'intended' ? 'Intended — no session yet' : state === 'background' ? 'Background theme' : 'Committed today'}`, notes: theme.notes, color: roleColor(theme.role) })}
                               onMouseMove={(ev)=> setHoverTip(prev => prev ? { ...prev, x: ev.clientX, y: ev.clientY } : prev)}
                               onMouseLeave={()=> setHoverTip(null)}>
                               {theme.priority==='high' && <span className="band-high-dot">▲</span>}
@@ -3138,41 +3154,9 @@ function App() {
               })()}
             </div>
 
-            {(() => {
-              const weekDates = [0,1,2,3,4,5,6].map(i => { const d=new Date(currentWeekStart); d.setDate(d.getDate()+i); return fmtInput(d); });
-              const weekStart = weekDates[0], weekEnd = weekDates[6];
-              const allDayItems = tasks.filter(t => t.allDay && isRoleSelected(t.role) && searchMatch(t) && (t.endDate||t.startDate) >= weekStart && t.startDate <= weekEnd);
-              if (allDayItems.length === 0) return null;
-              // assign rows so overlapping banners stack
-              const placed = [];
-              const rowsEnd = [];
-              allDayItems.slice().sort((a,b)=>a.startDate.localeCompare(b.startDate)).forEach(t => {
-                const s = t.startDate < weekStart ? 0 : weekDates.indexOf(t.startDate);
-                const e = (t.endDate||t.startDate) > weekEnd ? 6 : weekDates.indexOf(t.endDate||t.startDate);
-                let row = 0;
-                while (rowsEnd[row] !== undefined && rowsEnd[row] >= s) row++;
-                rowsEnd[row] = e;
-                placed.push({ t, s, e, row });
-              });
-              const rowCount = rowsEnd.length;
-              return (
-                <div className="allday-strip" style={{ gridTemplateRows: `repeat(${rowCount}, 22px)` }}>
-                  <div className="allday-label">all-day</div>
-                  <div className="allday-track">
-                    {placed.map(({t, s, e, row}) => (
-                      <div key={t.id} className="allday-banner"
-                        style={{ gridColumn: `${s+1} / ${e+2}`, gridRow: row+1, background: roleColor(t.role)+'22', borderLeft: `3px solid ${roleColor(t.role)}` }}
-                        onClick={() => { setHoverTip(null); openSessionView(t, t.startDate); }}
-                        onMouseEnter={(ev)=> setHoverTip({ x: ev.clientX, y: ev.clientY, title: t.title, time: `All day${t.endDate && t.endDate !== t.startDate ? ` · ${new Date(t.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}–${new Date(t.endDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : ''}${t.location ? ` · ${t.location}` : ''}`, notes: t.notes, color: roleColor(t.role) })}
-                        onMouseMove={(ev)=> setHoverTip(prev => prev ? { ...prev, x: ev.clientX, y: ev.clientY } : prev)}
-                        onMouseLeave={()=> setHoverTip(null)}>
-                        {t.done ? '✓ ' : ''}{t.title}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
+            {/* The separate all-day strip was removed: all-day items are day-themes now and
+                render in the pinned themes lane above (see themesForDay). One banner row,
+                one grid, so nothing can misalign. */}
 
             <div className="calendar-scroll" ref={calScrollRef}>
               <div className="calendar-body">

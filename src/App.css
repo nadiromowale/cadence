@@ -159,16 +159,16 @@ button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; f
 
 /* CALENDAR */
 .calendar-container { flex: 1; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--chrome-line); border-radius: 4px; overflow: hidden; }
-.week-header { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 0; }
+.week-header { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; }
 .week-header > div, .day-header { padding: 7px 4px; background: linear-gradient(to bottom, #4A4A4A, #383838); text-align: center; font-weight: 700; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--chrome-ink); font-family: var(--font-mono); border-left: 1px solid var(--chrome-line); border-bottom: 1px solid var(--chrome-line); box-shadow: inset 0 2px 0 rgba(255,255,255,0.12), inset 0 1px 0 #6A6A6A, inset 0 -3px 6px rgba(0,0,0,0.5); }
 .day-header small { display: block; font-family: var(--font-display); font-size: 17px; font-weight: 700; color: var(--chrome-ink); margin-top: 2px; letter-spacing: 0; text-transform: none; }
 .day-header.today { background: linear-gradient(to bottom, #1F8A9E, #135C6A); box-shadow: inset 0 1px 0 #34B7CE; color: #fff; }
 .day-header.today small { color: #fff; }
 .time-header { background: linear-gradient(to bottom, #4A4A4A, #383838); box-shadow: inset 0 2px 0 rgba(255,255,255,0.12), inset 0 1px 0 #6A6A6A, inset 0 -3px 6px rgba(0,0,0,0.5); }
-.calendar-scroll { flex: 1; overflow-y: auto; scrollbar-gutter: stable; border: none; background: var(--lane-a); }
-.calendar-scroll::-webkit-scrollbar { width: 8px; }
+.calendar-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; border: none; background: var(--lane-a); }
+.calendar-scroll::-webkit-scrollbar { width: 8px; background: transparent; }
 .calendar-scroll::-webkit-scrollbar-track { background: transparent; }
-.calendar-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 4px; }
+.calendar-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.28); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
 
 /* PRIORITY BAND */
 .priority-band { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; min-height: 60px; border-bottom: 2px solid var(--line-strong); background: var(--line); padding: 0; position: relative; align-items: stretch; }
@@ -197,7 +197,7 @@ button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; f
 .intend-chip-x { background: none; border: none; cursor: pointer; font-size: 13px; line-height: 1; color: #6366f1; padding: 0; width: auto; }
 .intend-chip-x:hover { color: #312e81; }
 
-.calendar-body { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; background: var(--line); }
+.calendar-body { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; background: var(--line); margin-right: -8px; }
 .time-col { display: flex; flex-direction: column; background: var(--line); }
 .time-label { background: var(--ins-head); padding: 4px; font-size: var(--micro-fs, 10px); color: var(--ink-2); font-family: var(--font-mono); text-align: center; height: 68px; min-height: 68px; display: flex; align-items: flex-start; justify-content: center; margin-bottom: 1px; }
 .day-col { position: relative; background: var(--line); display: flex; flex-direction: column; }
@@ -518,12 +518,6 @@ textarea { resize: vertical; }
 
 /* Day-coverage meter (spec §8) */
 .coverage-row { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; background: var(--line); }
-  /* Fixed rows reserve the SAME scrollbar gutter the day grid reserves, using the browser
-     computed width (scrollbar-gutter plus overflow hidden). It matches exactly, so every
-     row lines up and Sunday reaches the right edge with no hand-guessed pixels. */
-  .week-header, .priority-band, .allday-strip, .coverage-row {
-    scrollbar-gutter: stable; overflow: hidden;
-  }
 .coverage-spacer-legacy-removed { display: none; }
 .coverage-cell { background: linear-gradient(var(--chrome-3), var(--chrome-4)); padding: 6px 4px; display: flex; flex-direction: column; align-items: center; gap: 3px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 2px rgba(0,0,0,0.3); }
 .coverage-leds { display: flex; gap: 1.5px; padding: 2px; background: var(--chrome-4); border-radius: 2px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); }
