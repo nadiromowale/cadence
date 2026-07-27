@@ -165,7 +165,7 @@ button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; f
 .day-header.today { background: linear-gradient(to bottom, #1F8A9E, #135C6A); box-shadow: inset 0 1px 0 #34B7CE; color: #fff; }
 .day-header.today small { color: #fff; }
 .time-header { background: linear-gradient(to bottom, #4A4A4A, #383838); box-shadow: inset 0 2px 0 rgba(255,255,255,0.12), inset 0 1px 0 #6A6A6A, inset 0 -3px 6px rgba(0,0,0,0.5); }
-.calendar-scroll { flex: 1; overflow-y: auto; scrollbar-gutter: stable; border: 1px solid var(--line); border-top: none; background: #FFFFFF; }
+.calendar-scroll { flex: 1; overflow-y: auto; scrollbar-gutter: stable; border: none; background: var(--lane-a); }
 .calendar-scroll::-webkit-scrollbar { width: 8px; }
 .calendar-scroll::-webkit-scrollbar-track { background: transparent; }
 .calendar-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 4px; }
@@ -520,8 +520,13 @@ textarea { resize: vertical; }
 .coverage-row { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; background: var(--line); }
   /* The day grid scrolls inside .calendar-scroll, which reserves an 8px scrollbar gutter
      (scrollbar-gutter: stable). These fixed rows sit OUTSIDE the scroll area, so they must
-     reserve the same 8px on the right or their columns drift left of the day columns. */
-  .week-header, .priority-band, .allday-strip, .coverage-row { padding-right: 8px; }
+     reserve the same 8px on the right or their columns drift left of the day columns.
+     border-right (not padding) keeps the reserved strip a clean, single tone that reads as
+     part of the same box rather than exposing the row's divider background. */
+  .week-header { border-right: 8px solid var(--chrome-3); }
+  .priority-band { border-right: 8px solid var(--line); }
+  .allday-strip { border-right: 8px solid var(--lane-a); }
+  .coverage-row { border-right: 8px solid var(--chrome-4); }
 .coverage-spacer-legacy-removed { display: none; }
 .coverage-cell { background: linear-gradient(var(--chrome-3), var(--chrome-4)); padding: 6px 4px; display: flex; flex-direction: column; align-items: center; gap: 3px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 2px rgba(0,0,0,0.3); }
 .coverage-leds { display: flex; gap: 1.5px; padding: 2px; background: var(--chrome-4); border-radius: 2px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); }
