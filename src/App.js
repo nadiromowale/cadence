@@ -482,6 +482,12 @@ function App() {
     window.navigator.standalone === true // iOS
   );
   const [splash, setSplash] = useState(!isStandalone);
+  // Ticks every 30s so the "now" line floats down through the day like Google Calendar's.
+  const [nowTick, setNowTick] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
   useEffect(() => {
     if (isStandalone) return; // no CSS splash in the installed app
     const hold = setTimeout(() => setSplash(false), 2100); // hold, then fade
@@ -820,23 +826,43 @@ function App() {
     });
   }, [tasks, loaded]);
 
-  // Scroll the calendar to the preferred day-start hour
+  // Scroll the calendar so NOW sits about 1/3 down the visible area — you see less of
+  // what's passed and more of what's ahead. Falls back to the start hour if today isn't
+  // in view (a different week). Re-centers on view entry, week change, and dayStartHour.
   useEffect(() => {
-    if (viewMode === 'score' && calScrollRef.current) {
-      const rowHeight = 69; // 68px + 1px gap
-      // delay one frame so the element is laid out after the view switch
-      requestAnimationFrame(() => {
-        if (calScrollRef.current) calScrollRef.current.scrollTop = dayStartHour * rowHeight;
-      });
-    }
-  }, [dayStartHour, loaded, viewMode]);
+    if (viewMode !== 'score' || !calScrollRef.current) return;
+    const rowHeight = 69; // 68px + 1px gap
+    requestAnimationFrame(() => {
+      const el = calScrollRef.current;
+      if (!el) return;
+      const now = new Date();
+      const todayStr = fmtInput(now);
+      const weekDates = [0,1,2,3,4,5,6].map(i => { const d=new Date(currentWeekStart); d.setDate(d.getDate()+i); return fmtInput(d); });
+      const showingThisWeek = weekDates.includes(todayStr);
+      if (showingThisWeek) {
+        const nowRow = now.getHours() + now.getMinutes()/60; // fractional hour
+        const nowY = nowRow * rowHeight;
+        // put NOW about a third of the way down the viewport
+        el.scrollTop = Math.max(0, nowY - el.clientHeight / 3);
+      } else {
+        el.scrollTop = dayStartHour * rowHeight;
+      }
+    });
+  }, [dayStartHour, loaded, viewMode, currentWeekStart]);
 
-  // Scroll the Timeline horizontally to the work-hours start
+  // Scroll the Timeline so NOW sits about 1/3 in from the left (nearer the roles), so more
+  // of the day ahead is visible. Falls back to the start hour on other days.
   useEffect(() => {
-    if (viewMode === 'timeline' && timelineScrollRef.current) {
-      const hourW = parseInt(timelineScrollRef.current.getAttribute('data-hourw'),10) || 130;
-      // label column is 100px; align so dayStartHour sits just after the labels
-      timelineScrollRef.current.scrollLeft = dayStartHour * hourW;
+    if (viewMode !== 'timeline' || !timelineScrollRef.current) return;
+    const el = timelineScrollRef.current;
+    const hourW = parseInt(el.getAttribute('data-hourw'),10) || 130;
+    const now = new Date();
+    if (timelineDay === fmtInput(now)) {
+      const nowHour = now.getHours() + now.getMinutes()/60;
+      const nowX = nowHour * hourW;
+      el.scrollLeft = Math.max(0, nowX - el.clientWidth / 3);
+    } else {
+      el.scrollLeft = dayStartHour * hourW;
     }
   }, [viewMode, timelineDay, dayStartHour]);
 
@@ -2426,6 +2452,12 @@ function App() {
         })()}
         <div className="timeline-scroll" ref={timelineScrollRef} data-hourw={HOUR_W}>
           <div className="timeline-grid" style={{width: 150 + 24*HOUR_W}}>
+            {/* "Now" line — vertical, only when the Timeline is showing today. 150px label gutter. */}
+            {timelineDay === fmtInput(nowTick) && (
+              <div className="tl-now-line" style={{ left: 150 + (nowTick.getHours() + nowTick.getMinutes()/60) * HOUR_W }}>
+                <span className="tl-now-dot"></span>
+              </div>
+            )}
             {/* hour ruler */}
             <div className="timeline-ruler">
               <div className="timeline-corner"></div>
@@ -3191,6 +3223,12 @@ function App() {
                       }}>
                       {gridSnap < 60 && (
                         <div className="subgrid-overlay" style={{ backgroundSize: `100% ${(gridSnap/60)*HOUR_PX}px` }}></div>
+                      )}
+                      {/* "Now" line — today's column only, floats down with the clock (like Google) */}
+                      {dateStr === fmtInput(nowTick) && (
+                        <div className="now-line" style={{ top: (nowTick.getHours() + nowTick.getMinutes()/60) * HOUR_PX }}>
+                          <span className="now-dot"></span>
+                        </div>
                       )}
                       {/* all-day claim always takes the LEFT half (striped, permanent marker);
                           backdrop washes the remaining space so booked-over sessions stay visible */}

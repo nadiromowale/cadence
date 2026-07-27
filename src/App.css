@@ -418,7 +418,7 @@ textarea { resize: vertical; }
 .timeline-day-head h2 { font-size: 18px; font-weight: 700; color: #FFFFFF; }
 .timeline-today-badge { font-family: var(--font-mono); font-size: 10px; background: linear-gradient(to bottom, #1F8A9E, #135C6A); color: #fff; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
 .timeline-scroll { flex: 1; overflow: auto; border: 1px solid var(--chrome-line); border-radius: 5px; background: #606060; }
-.timeline-grid { min-width: 100%; }
+.timeline-grid { min-width: 100%; position: relative; }
 .timeline-ruler { display: flex; position: sticky; top: 0; z-index: 10; background: var(--ins-head); border-bottom: 1px solid var(--line); }
 .timeline-corner { width: 150px; flex-shrink: 0; background: var(--ins-head); position: sticky; left: 0; z-index: 11; border-right: 1px solid var(--line); }
 .timeline-hours { display: flex; }
@@ -1552,3 +1552,12 @@ textarea { resize: vertical; }
   .notes-field { resize: vertical; min-height: 150px; font-size: 16px; }
   .notes-field:focus { min-height: 200px; }
 }
+
+/* ---- "Now" indicators (Score + Timeline), subtle, teal, float with the clock ---- */
+/* Score: horizontal line across today's column only */
+.now-line { position: absolute; left: 0; right: 0; height: 2px; background: #1AB5C4; z-index: 7; pointer-events: none; opacity: 0.95; }
+.now-dot { position: absolute; left: -2px; top: -5px; width: 12px; height: 12px; border-radius: 50%; background: #1AB5C4; box-shadow: 0 0 6px rgba(26,181,196,0.7), 0 1px 2px rgba(0,0,0,0.3); }
+
+/* Timeline: vertical line at the current time, only when showing today */
+.tl-now-line { position: absolute; top: 0; bottom: 0; width: 2px; background: #1AB5C4; z-index: 7; pointer-events: none; opacity: 0.9; }
+.tl-now-dot { position: absolute; top: -2px; left: -5px; width: 12px; height: 12px; border-radius: 50%; background: #1AB5C4; box-shadow: 0 0 6px rgba(26,181,196,0.7), 0 1px 2px rgba(0,0,0,0.3); }
