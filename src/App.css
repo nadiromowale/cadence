@@ -487,7 +487,7 @@ textarea { resize: vertical; }
 /* ALL-DAY STRIP */
 .allday-strip { display: grid; grid-template-columns: 50px 1fr; gap: 1px; background: var(--line); align-items: stretch; }
 .allday-label { background: var(--ins-head); font-family: var(--font-mono); font-size: 8.5px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.1em; display: flex; align-items: center; justify-content: center; font-weight: 600; }
-.allday-track { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px 2px; background: var(--lane-a); padding: 2px; }
+.allday-track { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--lane-a); padding: 0; }
 .allday-banner { font-size: var(--micro-fs, 10px); font-weight: 600; padding: 2px 8px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; display: flex; align-items: center; }
 .allday-banner:hover { filter: brightness(0.96); }
 
@@ -518,15 +518,12 @@ textarea { resize: vertical; }
 
 /* Day-coverage meter (spec §8) */
 .coverage-row { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; background: var(--line); }
-  /* The day grid scrolls inside .calendar-scroll, which reserves an 8px scrollbar gutter
-     (scrollbar-gutter: stable). These fixed rows sit OUTSIDE the scroll area, so they must
-     reserve the same 8px on the right or their columns drift left of the day columns.
-     border-right (not padding) keeps the reserved strip a clean, single tone that reads as
-     part of the same box rather than exposing the row's divider background. */
-  .week-header { border-right: 8px solid var(--chrome-3); }
-  .priority-band { border-right: 8px solid var(--line); }
-  .allday-strip { border-right: 8px solid var(--lane-a); }
-  .coverage-row { border-right: 8px solid var(--chrome-4); }
+  /* Fixed rows reserve the SAME scrollbar gutter the day grid reserves, using the browser
+     computed width (scrollbar-gutter plus overflow hidden). It matches exactly, so every
+     row lines up and Sunday reaches the right edge with no hand-guessed pixels. */
+  .week-header, .priority-band, .allday-strip, .coverage-row {
+    scrollbar-gutter: stable; overflow: hidden;
+  }
 .coverage-spacer-legacy-removed { display: none; }
 .coverage-cell { background: linear-gradient(var(--chrome-3), var(--chrome-4)); padding: 6px 4px; display: flex; flex-direction: column; align-items: center; gap: 3px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 2px rgba(0,0,0,0.3); }
 .coverage-leds { display: flex; gap: 1.5px; padding: 2px; background: var(--chrome-4); border-radius: 2px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); }
