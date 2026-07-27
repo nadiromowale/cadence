@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import AIPanel from './AIPanel';
 
+// Starter roles a brand-new user sees. Generic on purpose — a first-time tester relabels
+// these to fit their own life. (Nadir's own roles live in his saved data, not here.)
 const DEFAULT_ROLES = [
-  { id: 'oneness', label: 'Oneness (Self)', color: '#9D72DD' },
-  { id: 'omowale', label: 'Omowale Republic', color: '#CF6BB0' },
-  { id: 'icon', label: 'iCON Marketing', color: '#F0973F' },
-  { id: 'nadir', label: 'Nadir Omowale LLC', color: '#6CC056' }
+  { id: 'self',      label: 'Self',          color: '#9D72DD' },
+  { id: 'family',    label: 'Home & Family', color: '#5E9AE6' },
+  { id: 'work',      label: 'Work',          color: '#F0973F' },
+  { id: 'community', label: 'Community',     color: '#6CC056' }
 ];
 
 const COLOR_CHOICES = ['#9D72DD','#CF6BB0','#6CC056','#F0973F','#F07260','#E6BC3A','#5E9AE6','#E07296','#7F9C8B','#C88A5A','#B57EC8','#8FA36B','#D98C9C','#5FA6B0','#9A8FC2'];
@@ -640,7 +642,7 @@ function App() {
   const [hoverTip, setHoverTip] = useState(null); // shown only for overlapping (crammed) sessions
   const calScrollRef = useRef(null);
   const timelineScrollRef = useRef(null);
-  const [formData, setFormData] = useState(blankForm('oneness'));
+  const [formData, setFormData] = useState(blankForm(DEFAULT_ROLES[0].id));
 
   // ---- Node model (project tier) ----
   // The interior-node display name lives in ONE place. Swap it when the word lands.
