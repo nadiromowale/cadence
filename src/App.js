@@ -228,6 +228,15 @@ function isSessionPast(task, occurrenceDate, now) {
   const [h, m] = endHHMM.split(':').map(Number);
   const end = new Date(dayStr + 'T00:00:00');
   end.setHours(h, m, 0, 0);
+  // If the end time is earlier than the start time, the session crosses midnight
+  // (e.g. 11:00 PM–1:00 AM), so its real end is on the NEXT day. Without this, a
+  // late-night meeting reads as "past" the moment it's created.
+  if (task.endTime) {
+    const [sh, sm] = task.time.split(':').map(Number);
+    if (h * 60 + m < sh * 60 + sm) {
+      end.setDate(end.getDate() + 1);
+    }
+  }
   return (now || new Date()) > end;
 }
 
@@ -1500,9 +1509,14 @@ function App() {
     setEditingId(task.id);
     setEditingOccurrenceDate(occurrenceDate || null);
     const rep = task.repeat || {};
+    // A timed item is always a session; a theme carries a real kind and no time. This
+    // drives which controls show. Without it a plain session defaulted to kind:'weekly'
+    // and wrongly rendered the Theme-type selector (and could confuse the Conductor).
+    const isRealTheme = !task.time && (task.kind === 'weekly' || task.kind === 'project' || task.kind === 'standing');
     setFormData({
       title: task.title, role: task.role, priority: task.priority, isBackground: !!task.isBackground,
       themeIds: task.themeIds || (task.themeId ? [task.themeId] : []), done: !!task.done, allDay: !!task.allDay,
+      draftKind: isRealTheme ? 'theme' : 'session',
       startDate: occurrenceDate && rep.freq && rep.freq !== 'none' ? occurrenceDate : task.startDate,
       // Clamp a stale end-before-start so the editor never shows an invalid range.
       endDate: (() => {
@@ -1515,7 +1529,7 @@ function App() {
       notes: task.notes || '', links: Array.isArray(task.links) ? task.links.join('\n') : (task.links || ''), tags: (task.tags || []).join(', '),
       reminderDate: task.reminder ? task.reminder.split('T')[0] : '',
       reminderTime: task.reminder ? (task.reminder.split('T')[1] || '').slice(0,5) : '',
-      kind: task.kind || 'weekly', themeWeek: task.themeWeek || fmtInput(currentWeekStart), themeEnd: task.themeEnd || '',
+      kind: isRealTheme ? (task.kind || 'weekly') : undefined, themeWeek: task.themeWeek || fmtInput(currentWeekStart), themeEnd: task.themeEnd || '',
       parentId: task.parentId ?? null, checklist: task.checklist || [], listName: task.listName || '',
       resourceRefs: task.resourceRefs || [], localResources: task.localResources || [], links: Array.isArray(task.links) ? task.links.join('\n') : (task.links || ''),
       repeatFreq: rep.freq || 'none',
@@ -1582,9 +1596,14 @@ function App() {
       })(),
       endDate: (() => {
         // uses fd (normalised above) so an end-before-start can't slip through
+        // A TIMED session lives on ONE date. If its end time is earlier than its start,
+        // it crosses midnight — but that's expressed by the times, NOT a separate end
+        // date. So a timed session's endDate always equals its startDate. Only all-day
+        // items (a multi-day trip) carry a real end date.
+        if (fd.time && !fd.allDay) return fd.startDate || '';
         if (fd.draftKind === 'session') return fd.endDate || '';
         const taggedToTheme = (fd.themeIds && fd.themeIds.length > 0) || fd.themeId != null;
-        if (taggedToTheme || fd.time || fd.allDay) return fd.endDate || '';
+        if (taggedToTheme || fd.allDay) return fd.endDate || '';
         return fd.themeEnd || fd.themeWeek || fd.startDate || fmtInput(currentWeekStart);
       })(),
       time: formData.allDay ? '' : formData.time,
@@ -3514,7 +3533,7 @@ function App() {
                 // for a session, even an unscheduled one. A session isn't weekly/standing/project.
                 const isThemeDraft = formData.draftKind === 'theme';
                 const taggedToTheme = (formData.themeIds && formData.themeIds.length > 0) || formData.themeId != null;
-                const existingTheme = editingId && (() => { const o = tasks.find(t=>t.id===editingId); return o && (o.kind==='weekly'||o.kind==='project'||o.kind==='standing'); })();
+                const existingTheme = editingId && (() => { const o = tasks.find(t=>t.id===editingId); return o && !o.time && (o.kind==='weekly'||o.kind==='project'||o.kind==='standing'); })();
                 // An EXISTING theme always gets its theme-only fields — some carry a stray
                 // time from earlier versions, and hiding the controls on those made it
                 // impossible to change Weekly → Project. A NEW draft still has to be
@@ -3548,7 +3567,7 @@ function App() {
               {(() => {
                 const isThemeDraft = formData.draftKind === 'theme';
                 const taggedToTheme = (formData.themeIds && formData.themeIds.length > 0) || formData.themeId != null;
-                const existingTheme = editingId && (() => { const o = tasks.find(t=>t.id===editingId); return o && (o.kind==='weekly'||o.kind==='project'||o.kind==='standing'); })();
+                const existingTheme = editingId && (() => { const o = tasks.find(t=>t.id===editingId); return o && !o.time && (o.kind==='weekly'||o.kind==='project'||o.kind==='standing'); })();
                 // An EXISTING theme always gets its theme-only fields — some carry a stray
                 // time from earlier versions, and hiding the controls on those made it
                 // impossible to change Weekly → Project. A NEW draft still has to be
@@ -3607,12 +3626,14 @@ function App() {
                     setFormData({...formData, startDate: ns, endDate: ne});
                   }} />
                 </div>
+                {formData.allDay && (
                 <div className="form-group"><label>End Date <span className="field-hint-inline">(optional)</span></label><input type="date" min={formData.startDate || undefined} value={formData.endDate} onChange={e => {
                   const v = e.target.value;
                   // Never allow an end before the start — clamp it to the start date.
                   const clamped = (v && formData.startDate && v < formData.startDate) ? formData.startDate : v;
                   setFormData({...formData, endDate: clamped});
                 }}/></div>
+                )}
               </div>
               {!formData.allDay && (
               <>
@@ -3635,6 +3656,9 @@ function App() {
                 <div className="form-group">
                   <label>End Time</label>
                   <TimeEntry value={formData.endTime} use24h={use24h} startTime={formData.time} onChange={v => setFormData({...formData, endTime: v, duration: v ? '' : formData.duration})} />
+                  {formData.time && formData.endTime && toMinutes(formData.endTime) < toMinutes(formData.time) && (
+                    <span className="field-hint-inline" style={{display:'block', marginTop:4}}>Ends next day (crosses midnight)</span>
+                  )}
                 </div>
               </div>
               <div className="form-group"><label>Duration (minutes, alternative to end time)</label><input type="number" value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value, endTime: e.target.value ? '' : formData.endTime})} placeholder="e.g. 90"/></div>
