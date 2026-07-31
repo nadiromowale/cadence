@@ -390,7 +390,22 @@ function App() {
   const [currentWeekStart, setCurrentWeekStart] = useState(getMonday(new Date()));
   const [selectedRole, setSelectedRole] = useState('all');
   const [taskColView, setTaskColView] = useState('byRole'); // byRole | selected | unscheduled
+  // Role groups the user has folded up in the Sessions panel (set of role ids).
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
+  const toggleGroup = (roleId) => setCollapsedGroups(prev => {
+    const next = new Set(prev);
+    if (next.has(roleId)) next.delete(roleId); else next.add(roleId);
+    return next;
+  });
   const [themesSort, setThemesSort] = useState('priority'); // priority | role | type
+  // Theme groups the user has folded up (keyed by "sortMode:groupKey" so collapse state
+  // is independent per grouping mode).
+  const [collapsedThemeGroups, setCollapsedThemeGroups] = useState(() => new Set());
+  const toggleThemeGroup = (key) => setCollapsedThemeGroups(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   const [timelineListView, setTimelineListView] = useState('chrono'); // chrono | byRole | byTheme
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -1888,6 +1903,39 @@ function App() {
     return list.sort(byPriority);
   })();
 
+  // Group the (already-sorted) themes into labeled, collapsible groups per the sort mode.
+  // Returns [{ key, label, color, items }]. Priority/role/type each produce their own groups.
+  function groupedThemes() {
+    const items = priorityTasks;
+    if (themesSort === 'role') {
+      return roles.map(r => ({
+        key: `role:${r.id}`, label: r.label, color: r.color,
+        items: items.filter(t => t.role === r.id),
+      })).filter(g => g.items.length > 0);
+    }
+    if (themesSort === 'type') {
+      const kinds = [
+        { k: 'weekly', label: 'Weekly' },
+        { k: 'project', label: 'Project' },
+        { k: 'standing', label: 'Standing' },
+      ];
+      return kinds.map(({k, label}) => ({
+        key: `type:${k}`, label, color: null,
+        items: items.filter(t => (t.kind || 'weekly') === k),
+      })).filter(g => g.items.length > 0);
+    }
+    // priority
+    const levels = [
+      { p: 'high', label: 'High' },
+      { p: 'medium', label: 'Medium' },
+      { p: 'low', label: 'Low' },
+    ];
+    return levels.map(({p, label}) => ({
+      key: `priority:${p}`, label, color: null,
+      items: items.filter(t => (t.priority || 'medium') === p),
+    })).filter(g => g.items.length > 0);
+  }
+
   // Task column content
   // Monday..Sunday date strings for the currently viewed Score week
   function viewedWeekDates() {
@@ -2185,6 +2233,18 @@ function App() {
       // A completed session is archived out of the active panel — it shouldn't sit
       // in the working list (and must never read as "unscheduled").
       list = list.filter(t => (t.time || t.allDay) && !t.done && sessionInViewedWeek(t));
+      // Also drop sessions that are simply PAST. Once a session's time has ended it's
+      // handled — it only fades on the calendar (which keeps the day's history), but on
+      // this list it's just noise taking up cognitive space. EXCEPTION: recurring
+      // sessions stay, because this week's occurrence being over doesn't mean the session
+      // is done — it returns next week. So we remove past ONE-OFF sessions only.
+      const now = new Date();
+      list = list.filter(t => {
+        const isRecurring = t.repeat && t.repeat.freq && t.repeat.freq !== 'none';
+        if (isRecurring) return true; // recurring sessions always stay
+        if (!t.time) return true;      // all-day/no-clock items aren't "past" by time
+        return !isSessionPast(t, t.startDate, now); // drop past one-offs
+      });
     }
     return list;
   }
@@ -3117,10 +3177,15 @@ function App() {
                 roles.map(role => {
                   const rt = taskColumnTasks().filter(t => t.role === role.id).slice().sort(byPriority);
                   if (rt.length === 0) return null;
+                  const collapsed = collapsedGroups.has(role.id);
                   return (
-                    <div key={role.id} className="task-group">
-                      <div className="task-group-head" style={{color: role.color}}>{role.label}</div>
-                      {rt.map(t => <TaskChip key={t.id} t={t} color={roleColor(t.role)} use24h={use24h} onDragStart={handleDragStart} onClick={() => openSessionView(t)} />)}
+                    <div key={role.id} className={`task-group${collapsed ? ' collapsed' : ''}`}>
+                      <div className="task-group-head" style={{color: role.color}} onClick={() => toggleGroup(role.id)}>
+                        <span className="task-group-chevron">{collapsed ? '▸' : '▾'}</span>
+                        <span className="task-group-label">{role.label}</span>
+                        <span className="task-group-count">{rt.length}</span>
+                      </div>
+                      {!collapsed && rt.map(t => <TaskChip key={t.id} t={t} color={roleColor(t.role)} use24h={use24h} onDragStart={handleDragStart} onClick={() => openSessionView(t)} />)}
                     </div>
                   );
                 })
@@ -3405,7 +3470,17 @@ function App() {
             </div>
             <div className="priority-list" onClick={() => openModal(false)}>
               {priorityTasks.length === 0 ? <div className="empty-state">No themes — click here to add one</div> :
-                priorityTasks.map(t => (
+                groupedThemes().map(group => {
+                  const collapsed = collapsedThemeGroups.has(group.key);
+                  return (
+                    <div key={group.key} className={`theme-group${collapsed ? ' collapsed' : ''}`}>
+                      <div className="task-group-head theme-group-head" style={group.color ? {color: group.color} : undefined}
+                        onClick={(e) => { e.stopPropagation(); toggleThemeGroup(group.key); }}>
+                        <span className="task-group-chevron">{collapsed ? '▸' : '▾'}</span>
+                        <span className="task-group-label">{group.label}</span>
+                        <span className="task-group-count">{group.items.length}</span>
+                      </div>
+                      {!collapsed && group.items.map(t => (
                   <div key={t.id} className={`priority-item`} style={{borderLeftColor: roleColor(t.role)}}
                     draggable
                     onDragStart={(e) => handleDragStart(e, t)}
@@ -3454,7 +3529,10 @@ function App() {
                       ) : <span className="tmb-spacer" />}
                     </div>
                   </div>
-                ))
+                ))}
+                    </div>
+                  );
+                })
               }
             </div>
           </div>
