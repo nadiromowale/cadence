@@ -4987,7 +4987,17 @@ function App() {
             </div>
             <div className="priority-list">
               {priorityTasks.length === 0 ? <div className="empty-state">No themes this week</div> :
-                priorityTasks.map(t => (
+                groupedThemes().map(group => {
+                  const collapsed = collapsedThemeGroups.has(group.key);
+                  return (
+                    <div key={group.key} className={`theme-group${collapsed ? ' collapsed' : ''}`}>
+                      <div className="task-group-head theme-group-head" style={group.color ? {color: group.color} : undefined}
+                        onClick={() => toggleThemeGroup(group.key)}>
+                        <span className="task-group-chevron">{collapsed ? '▸' : '▾'}</span>
+                        <span className="task-group-label">{group.label}</span>
+                        <span className="task-group-count">{group.items.length}</span>
+                      </div>
+                      {!collapsed && group.items.map(t => (
                   <div key={t.id} className="priority-item" style={{borderLeftColor: roleColor(t.role)}}
                     onClick={() => { setMobileDrawer(null); setViewingThemeId(t.id); }}>
                     <div className="priority-toprow">
@@ -5002,7 +5012,10 @@ function App() {
                       })()}
                     </div>
                   </div>
-                ))}
+                      ))}
+                    </div>
+                  );
+                })}
             </div>
           </div>
 
