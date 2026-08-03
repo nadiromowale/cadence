@@ -1613,3 +1613,19 @@ textarea { resize: vertical; }
 .search-dropdown .m-search-result { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px 11px; background: none; border: none; border-bottom: 1px solid color-mix(in oklab, var(--line) 55%, transparent); cursor: pointer; }
 .search-dropdown .m-search-result:last-child { border-bottom: none; }
 .search-dropdown .m-search-result:hover { background: var(--sunken); }
+
+/* Go To Date: a calendar-icon button that opens the native date picker. The date input
+   covers the whole button and sits on top, so a click anywhere on the button opens the
+   picker (an inner icon element was intercepting clicks before). */
+.gotodate-btn, .m-gotodate { position: relative; cursor: pointer; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 17px; line-height: 1; padding: 0; min-width: 34px; min-height: 28px; }
+/* The emoji is decorative only; it must not catch clicks, or it creates a dead zone where
+   the click lands on the glyph instead of the date input beneath. pointer-events:none on
+   the label's own text pushes every click through to the input. */
+.gotodate-btn { font-size: 0; }
+.gotodate-btn .goto-glyph, .m-gotodate .goto-glyph { font-size: 17px; pointer-events: none; position: relative; z-index: 1; }
+.gotodate-input { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: none; padding: 0; margin: 0; z-index: 3; box-sizing: border-box; }
+/* The native date input's picker-indicator is the actual click target and by default only
+   occupies part of the field (leaving a "dead" finger-cursor zone). Stretch it to fill the
+   whole input so a click anywhere on the button opens the picker. */
+.gotodate-input::-webkit-calendar-picker-indicator { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+.gotodate-input::-webkit-inner-spin-button, .gotodate-input::-webkit-clear-button { display: none; -webkit-appearance: none; }

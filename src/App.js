@@ -2867,12 +2867,22 @@ function App() {
               <button className="btn-nav" onClick={() => { const d=new Date(currentWeekStart); d.setDate(d.getDate()-7); setCurrentWeekStart(getMonday(d)); }}>‹</button>
               <button className="btn-nav" onClick={() => setCurrentWeekStart(getMonday(new Date()))}>Today</button>
               <button className="btn-nav" onClick={() => { const d=new Date(currentWeekStart); d.setDate(d.getDate()+7); setCurrentWeekStart(getMonday(d)); }}>›</button>
+              <label className="btn-nav gotodate-btn" title="Go to date">
+                <span className="goto-glyph">📅</span>
+                <input type="date" className="gotodate-input"
+                  onChange={e => { if (e.target.value) jumpToDate(e.target.value); }} />
+              </label>
             </>
           ) : (
             <>
               <button className="btn-nav" onClick={() => setTimelineDay(addDays(timelineDay, -1))}>‹</button>
               <button className="btn-nav" onClick={() => setTimelineDay(fmtInput(new Date()))}>Today</button>
               <button className="btn-nav" onClick={() => setTimelineDay(addDays(timelineDay, 1))}>›</button>
+              <label className="btn-nav gotodate-btn" title="Go to date">
+                <span className="goto-glyph">📅</span>
+                <input type="date" className="gotodate-input"
+                  onChange={e => { if (e.target.value) jumpToDate(e.target.value, { timeline: true }); }} />
+              </label>
             </>
           )}
           <button className="btn-nav" onClick={() => setUse24h(!use24h)} title="Toggle time format">{use24h ? '24h' : '12h'}</button>
@@ -2926,6 +2936,11 @@ function App() {
             <button className="m-nav-btn" onClick={() => { if (viewMode==='timeline') { const d=new Date(timelineDay+'T00:00:00'); d.setDate(d.getDate()-1); setTimelineDay(fmtInput(d)); } else { const d=new Date(currentWeekStart); d.setDate(d.getDate()-7); setCurrentWeekStart(d); } }} title="Previous">‹</button>
             <button className="m-nav-btn m-nav-today" onClick={() => { const t=new Date(); setCurrentWeekStart(getMonday(t)); setTimelineDay(fmtInput(t)); }} title="Today">Today</button>
             <button className="m-nav-btn" onClick={() => { if (viewMode==='timeline') { const d=new Date(timelineDay+'T00:00:00'); d.setDate(d.getDate()+1); setTimelineDay(fmtInput(d)); } else { const d=new Date(currentWeekStart); d.setDate(d.getDate()+7); setCurrentWeekStart(d); } }} title="Next">›</button>
+            <label className="m-nav-btn m-gotodate" title="Go to date">
+              <span className="goto-glyph">📅</span>
+              <input type="date" className="gotodate-input"
+                onChange={e => { if (e.target.value) jumpToDate(e.target.value, { timeline: viewMode==='timeline' }); }} />
+            </label>
             <button className="m-appbar-search" onClick={() => setMobileMenu(!mobileMenu)} title="More">⋮</button>
           </div>
           {mobileMenu && (
