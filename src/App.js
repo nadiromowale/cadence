@@ -1870,6 +1870,35 @@ function App() {
       .filter(Boolean).some(f => f.toLowerCase().includes(q));
   };
 
+  // Global search: matches across ALL dates (not just the viewed week), so you can find a
+  // session/theme that lives in the future or past and jump to it. Returns dated results.
+  function globalSearchResults(q) {
+    const query = (q || '').trim().toLowerCase();
+    if (!query) return [];
+    return tasks
+      .filter(t => !t.parentId && [t.title, t.notes, (t.tags||[]).join(' '), (roles.find(r=>r.id===t.role)||{}).label]
+        .filter(Boolean).some(f => f.toLowerCase().includes(query)))
+      .sort((a,b) => (a.startDate||'').localeCompare(b.startDate||''))
+      .slice(0, 30);
+  }
+
+  // Move the calendar to the week (or day) containing a given YYYY-MM-DD date, and switch
+  // to the appropriate view. Used by search-jump and Go To Date.
+  function jumpToDate(dateStr, opts = {}) {
+    if (!dateStr) return;
+    const d = parseLocalDate(dateStr);
+    if (isNaN(d)) return;
+    // snap to the Monday of that date's week for the Score
+    const monday = new Date(d);
+    const dow = (monday.getDay() + 6) % 7; // 0=Mon
+    monday.setDate(monday.getDate() - dow);
+    setCurrentWeekStart(monday);
+    if (opts.timeline) { setTimelineDay(dateStr); setViewMode('timeline'); }
+    else if (viewMode === 'timeline') setTimelineDay(dateStr);
+    setMobileMenu(false);
+    setMobileDrawer(null);
+  }
+
   const hours = Array.from({ length: 24 }, (_, i) => i);
   const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
@@ -2852,7 +2881,27 @@ function App() {
             <span className="now-time">{fmtTime(`${String(nowClock.getHours()).padStart(2,'0')}:${String(nowClock.getMinutes()).padStart(2,'0')}`, use24h)}</span>
             <span className="now-label">NOW</span>
           </div>
-          <input className="search-box" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
+          <div className="search-wrap">
+            <input className="search-box" placeholder="Search all dates…" value={search} onChange={e => setSearch(e.target.value)} />
+            {search.trim() && (
+              <div className="search-dropdown">
+                {globalSearchResults(search).length === 0 ? (
+                  <div className="m-search-empty">No matches</div>
+                ) : globalSearchResults(search).map(t => (
+                  <button key={t.id} className="m-search-result"
+                    onClick={() => {
+                      jumpToDate(t.startDate, { timeline: !!t.time });
+                      if (t.time || t.allDay) openSessionView(t, t.startDate); else setViewingThemeId(t.id);
+                      setSearch('');
+                    }}>
+                    <span className="m-search-dot" style={{background: roleColor(t.role)}} />
+                    <span className="m-search-title">{t.title}</span>
+                    <span className="m-search-date">{t.startDate ? new Date(t.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : ''}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button className="btn-nav ai-toggle" onClick={() => setShowAI(!showAI)} title="Ask Cadence">✦ Ask Cadence</button>
         </div>
       </div>
@@ -2885,8 +2934,25 @@ function App() {
               <div className="m-menu">
                 <div className="m-menu-row">
                   <input type="text" className="m-menu-search" placeholder="Search sessions & themes…"
-                    value={search} onChange={e => setSearch(e.target.value)} />
+                    value={search} onChange={e => setSearch(e.target.value)} autoFocus />
                 </div>
+                {search.trim() && (
+                  <div className="m-search-results">
+                    {globalSearchResults(search).length === 0 ? (
+                      <div className="m-search-empty">No matches</div>
+                    ) : globalSearchResults(search).map(t => (
+                      <button key={t.id} className="m-search-result"
+                        onClick={() => {
+                          jumpToDate(t.startDate, { timeline: !!t.time });
+                          if (t.time || t.allDay) openSessionView(t, t.startDate); else setViewingThemeId(t.id);
+                        }}>
+                        <span className="m-search-dot" style={{background: roleColor(t.role)}} />
+                        <span className="m-search-title">{t.title}</span>
+                        <span className="m-search-date">{t.startDate ? new Date(t.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : ''}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <button className="m-menu-item" onClick={() => { setMobileMenu(false); setMobileDrawer('roles'); }}>☰ Roles</button>
                 <button className="m-menu-item" onClick={() => { setMobileMenu(false); setShowAI(true); }}>✦ Ask Cadence</button>
                 <div className="m-menu-sep" />
