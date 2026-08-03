@@ -3632,7 +3632,7 @@ function App() {
               <div className="form-group"><label>Title *</label><input type="text" value={formData.title} onChange={e => setFormData({...formData,title:e.target.value})} required autoFocus/></div>
               <div className="form-group"><label>Role</label><select value={formData.role} onChange={e => setFormData({...formData,role:e.target.value})}>{roles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
               <div className="form-group"><label>Priority</label><select value={formData.priority} onChange={e => setFormData({...formData,priority:e.target.value})}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
-              {(formData.time || formData.allDay) && (
+              {formData.draftKind !== 'theme' && (
                 <div className="form-group">
                   <label>Themes <span className="field-hint-inline">(a session can serve more than one)</span></label>
                   {formData.themeIds.length > 0 && (
