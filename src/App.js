@@ -2042,14 +2042,67 @@ function App() {
   // how a weekly theme behaves: no time = waiting on you.
   function untimedSessions() {
     const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    // No time requirement on startDate: a session with NO date and NO time is the most
+    // unfinished thing there is (a captured intention that's never been placed). It must
+    // surface in the tray, that's the whole "nothing slips" point. Excluding dateless
+    // sessions was silently hiding them.
     return tasks
-      .filter(t => !isTheme(t) && !t.time && !t.allDay && !t.done && t.startDate)
+      .filter(t => !isTheme(t) && !t.time && !t.allDay && !t.done)
       .sort(byPriority);
   }
 
   // Everything needing a decision in the tray: slipped themes + untimed sessions.
   function unfinishedItems() {
     return [...slippedThemes(), ...untimedSessions()];
+  }
+
+  // Renders the Unfinished Business tray, or null if nothing's unfinished. Used in BOTH the
+  // Score and Timeline session columns so the "nothing slips" safety net is visible in every
+  // view (it used to only appear in Score, so Timeline, and mobile-on-Timeline, hid it).
+  function renderUnfinishedTray() {
+    const slipped = slippedThemes();
+    const untimed = untimedSessions();
+    const total = slipped.length + untimed.length;
+    if (total === 0) return null;
+    return (
+      <div className="unfinished-tray">
+        <div className="unfinished-head">
+          <span className="unfinished-title">Unfinished Business</span>
+          <span className="unfinished-count">{total}</span>
+        </div>
+        <div className="unfinished-sub">Waiting on you — a theme that slipped its week, or a session with no time yet. Give it a slot or close it out.</div>
+        {slipped.map(t => (
+          <div key={t.id} className="unfinished-item" style={{borderLeftColor: roleColor(t.role)}}>
+            <div className="unfinished-item-title" onClick={() => setViewingThemeId(t.id)}>
+              <span className={`priority-label priority-${t.priority}`}>{t.priority}</span>
+              {t.title}
+            </div>
+            <div className="unfinished-item-meta">from week of {new Date((t.themeWeek||t.startDate)+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}{(() => { const open = openLeafCount(t.id); return open > 0 ? ` · ${open} item${open>1?'s':''} still open` : ''; })()}</div>
+            <div className="unfinished-actions">
+              <button className="ub-btn close" onClick={() => resolveSlipped(t.id,'close')}>✓ Close out</button>
+              <button className="ub-btn push" onClick={() => setViewingThemeId(t.id)}>→ Decide now</button>
+              <button className="ub-btn project" onClick={() => resolveSlipped(t.id,'project')}>⇄ Make project</button>
+            </div>
+          </div>
+        ))}
+        {untimed.map(s => (
+          <div key={s.id} className="unfinished-item unfinished-session" style={{borderLeftColor: roleColor(s.role)}}>
+            <div className="unfinished-item-title" onClick={() => openEdit(s, s.startDate)}>
+              <span className={`priority-label priority-${s.priority}`}>{s.priority}</span>
+              🕓 {s.title}
+            </div>
+            <div className="unfinished-item-meta">
+              session · no time yet{s.startDate ? ` · ${parseLocalDate(s.startDate).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : ''}
+              {(() => { const th = (s.themeIds && s.themeIds[0]) ? tasks.find(t=>t.id===s.themeIds[0]) : null; return th ? ` · in ${th.title}` : ''; })()}
+            </div>
+            <div className="unfinished-actions">
+              <button className="ub-btn push" onClick={() => openEdit(s, s.startDate)}>🕓 Give it a time</button>
+              <button className="ub-btn close" onClick={() => setTasks(prev => prev.map(t => t.id === s.id ? { ...t, done: true } : t))}>✓ Close out</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   }
 
   // Resolve a slipped theme: close it, push it to the viewed week, or make it a project
@@ -3155,6 +3208,7 @@ function App() {
               </select>
             </div>
             <div className="task-col-body">
+              {renderUnfinishedTray()}
               {(() => {
                 const dayS = tasks.filter(t => t.time && occursOn(t, timelineDay) && searchMatch(t));
                 if (dayS.length === 0) return <div className="empty-state">No sessions today</div>;
@@ -3208,52 +3262,7 @@ function App() {
               </select>
             </div>
             <div className="task-col-body">
-              {(() => {
-                const slipped = slippedThemes();
-                const untimed = untimedSessions();
-                const total = slipped.length + untimed.length;
-                if (total === 0) return null;
-                const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
-                return (
-                  <div className="unfinished-tray">
-                    <div className="unfinished-head">
-                      <span className="unfinished-title">Unfinished Business</span>
-                      <span className="unfinished-count">{total}</span>
-                    </div>
-                    <div className="unfinished-sub">Waiting on you — a theme that slipped its week, or a session with no time yet. Give it a slot or close it out.</div>
-                    {slipped.map(t => (
-                      <div key={t.id} className="unfinished-item" style={{borderLeftColor: roleColor(t.role)}}>
-                        <div className="unfinished-item-title" onClick={() => setViewingThemeId(t.id)}>
-                          <span className={`priority-label priority-${t.priority}`}>{t.priority}</span>
-                          {t.title}
-                        </div>
-                        <div className="unfinished-item-meta">from week of {new Date((t.themeWeek||t.startDate)+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}{(() => { const open = openLeafCount(t.id); return open > 0 ? ` · ${open} item${open>1?'s':''} still open` : ''; })()}</div>
-                        <div className="unfinished-actions">
-                          <button className="ub-btn close" onClick={() => resolveSlipped(t.id,'close')}>✓ Close out</button>
-                          <button className="ub-btn push" onClick={() => setViewingThemeId(t.id)}>→ Decide now</button>
-                          <button className="ub-btn project" onClick={() => resolveSlipped(t.id,'project')}>⇄ Make project</button>
-                        </div>
-                      </div>
-                    ))}
-                    {untimed.map(s => (
-                      <div key={s.id} className="unfinished-item unfinished-session" style={{borderLeftColor: roleColor(s.role)}}>
-                        <div className="unfinished-item-title" onClick={() => openEdit(s, s.startDate)}>
-                          <span className={`priority-label priority-${s.priority}`}>{s.priority}</span>
-                          🕓 {s.title}
-                        </div>
-                        <div className="unfinished-item-meta">
-                          session · no time yet{s.startDate ? ` · ${parseLocalDate(s.startDate).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : ''}
-                          {(() => { const th = (s.themeIds && s.themeIds[0]) ? tasks.find(t=>t.id===s.themeIds[0]) : null; return th ? ` · in ${th.title}` : ''; })()}
-                        </div>
-                        <div className="unfinished-actions">
-                          <button className="ub-btn push" onClick={() => openEdit(s, s.startDate)}>🕓 Give it a time</button>
-                          <button className="ub-btn close" onClick={() => setTasks(prev => prev.map(t => t.id === s.id ? { ...t, done: true } : t))}>✓ Close out</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
+              {renderUnfinishedTray()}
               {taskColView === 'byRole' ? (
                 roles.map(role => {
                   const rt = taskColumnTasks().filter(t => t.role === role.id).slice().sort(byPriority);
