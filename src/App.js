@@ -413,6 +413,31 @@ function App() {
   const [pendingSave, setPendingSave] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [viewingThemeId, setViewingThemeId] = useState(null);
+  const [cueDraft, setCueDraft] = useState('');
+  // When set, we're choosing which session to add this cue to (shows the session picker).
+  const [assigningCue, setAssigningCue] = useState(null);
+
+  // Candidate sessions a cue can be added to: real timed/all-day sessions (not themes, not
+  // other cues), preferring the same role, upcoming first. These are the "blocks" a cue
+  // can live inside — though structurally they're just sessions.
+  function candidateSessionsForCue(cue) {
+    if (!cue) return [];
+    const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    const todayStr = fmtInput(new Date());
+    return tasks
+      .filter(t => (t.time || t.allDay) && !t.done && !isTheme(t) && !t.parentId)
+      .filter(t => t.role === cue.role) // same role — that's the batching principle
+      .filter(t => (t.startDate || '') >= todayStr) // only upcoming sessions; no month-old ones
+      .sort((a,b) => (a.startDate + (a.time||'')).localeCompare(b.startDate + (b.time||'')));
+  }
+
+  // Attach a cue to a session (the container model): the cue becomes a child of the session
+  // via parentId. It keeps its theme tie; it now lives inside that session's block of time.
+  // No new competing session, so no time collision.
+  function addCueToSession(cueId, sessionId) {
+    setTasks(prev => prev.map(t => t.id === cueId ? { ...t, parentId: sessionId } : t));
+    setAssigningCue(null);
+  }
   const [viewingSession, setViewingSession] = useState(null);
   const [convertingTheme, setConvertingTheme] = useState(null); // themeId being demoted to a session
   const [sessionPanel, setSessionPanel] = useState(null); // { themeId, rect } — hover list of session titles
@@ -475,6 +500,9 @@ function App() {
   // When a theme/session is opened FROM a drawer, remember it so closing returns you
   // there instead of dumping you back to the calendar mid-review.
   const [returnToDrawer, setReturnToDrawer] = useState(null);
+  // When editing a cue from a theme's Cue Sheet, remember to reopen the theme afterward
+  // instead of closing to the calendar.
+  const [returnToTheme, setReturnToTheme] = useState(null);
   function closeThemeView() {
     const back = returnToDrawer;
     setReturnToDrawer(null);
@@ -1149,6 +1177,24 @@ function App() {
   // or if it hangs anywhere in the theme's item tree (parentId chain).
   // Unscheduled sessions belonging to a theme — folded-back work waiting to be
   // assigned a time. Mirrors sessionsForTheme but for items WITHOUT a time/all-day.
+  // Add a "cue" to a theme's Cue Sheet: an untimed task tied to the theme, inheriting the
+  // theme's role. It has no time, so it's planned work waiting to be scheduled into a block.
+  // (It is NOT Unfinished Business, that's for committed work that slipped.)
+  function addCueToTheme(themeId, title) {
+    const theme = tasks.find(t => t.id === themeId);
+    if (!theme) return;
+    const cue = {
+      id: Date.now() + Math.floor(Math.random()*1000),
+      title, role: theme.role, priority: 'medium',
+      time: '', endTime: '', allDay: false,
+      startDate: '', endDate: '',
+      themeIds: [themeId], parentId: null,
+      notes: '', links: [], tags: [], done: false,
+      isCue: true, // marks it as originating from a theme Cue Sheet (planned, not slipped)
+    };
+    setTasks(prev => [...prev, cue]);
+  }
+
   function unscheduledForTheme(themeId) {
     const treeIds = subtreeItemIds(themeId);
     const theme = tasks.find(t => t.id === themeId);
@@ -1157,6 +1203,12 @@ function App() {
       if (t.time || t.allDay) return false;      // only unscheduled
       if (t.id === themeId) return false;         // not the theme itself
       if ((t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing')) return false; // not a theme
+      // If this cue has been assigned INTO a session (its parent is a timed/all-day session),
+      // it's no longer "to schedule" — it lives inside that session now. Leave it off the list.
+      if (t.parentId != null) {
+        const parent = tasks.find(p => p.id === t.parentId);
+        if (parent && (parent.time || parent.allDay)) return false;
+      }
       const ids = t.themeIds || (t.themeId ? [t.themeId] : []);
       if (ids.includes(themeId)) return true;
       if (t.parentId != null && treeIds.has(t.parentId)) return true;
@@ -1737,6 +1789,26 @@ function App() {
     }
     setShowModal(false);
     setEditingOccurrenceDate(null);
+    if (returnToTheme != null) { const back = returnToTheme; setReturnToTheme(null); setViewingThemeId(back); }
+  }
+
+  // Close the session editor modal, and if we opened it from a theme's Cue Sheet, reopen
+  // that theme instead of dropping to the calendar.
+  function closeSessionModal() {
+    setShowModal(false);
+    setEditingOccurrenceDate(null);
+    if (returnToTheme != null) {
+      const back = returnToTheme;
+      setReturnToTheme(null);
+      setViewingThemeId(back);
+    }
+  }
+
+  // Open the editor for a cue, remembering to return to its theme on close.
+  function bookTimeForCue(cue, themeId) {
+    setReturnToTheme(themeId);
+    setViewingThemeId(null);
+    openEdit(cue, cue.startDate);
   }
 
   // Apply an edit at a chosen scope: 'this' | 'following' | 'all'
@@ -2042,12 +2114,23 @@ function App() {
   // how a weekly theme behaves: no time = waiting on you.
   function untimedSessions() {
     const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
-    // No time requirement on startDate: a session with NO date and NO time is the most
-    // unfinished thing there is (a captured intention that's never been placed). It must
-    // surface in the tray, that's the whole "nothing slips" point. Excluding dateless
-    // sessions was silently hiding them.
+    // Unfinished Business is for work that SLIPPED — committed/loose items with nowhere to
+    // live. It is NOT a theme's planned task list.
+    // A CUE (planned theme work) belongs in its theme's Cue Sheet, NOT here. So exclude:
+    //   - anything flagged isCue (created via a theme's Cue Sheet)
+    //   - anything tagged to a theme (themeIds) — that's theme work, shown in the theme
+    //   - anything already filed inside a session (parentId → a session) — it lives there
+    // What REMAINS in the tray: a truly loose untimed session (no theme, no cue) — a captured
+    // intention with no home. That's the "nothing slips" case we do want to surface.
     return tasks
-      .filter(t => !isTheme(t) && !t.time && !t.allDay && !t.done)
+      .filter(t => {
+        if (isTheme(t) || t.time || t.allDay || t.done) return false;
+        if (t.isCue) return false;
+        const ids = t.themeIds || (t.themeId ? [t.themeId] : []);
+        if (ids.length > 0) return false;
+        if (t.parentId != null) return false;
+        return true;
+      })
       .sort(byPriority);
   }
 
@@ -3635,7 +3718,7 @@ function App() {
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowModal(false)}>×</button>
+            <button className="modal-close" onClick={closeSessionModal}>×</button>
             <h2 className="modal-header">{editingId ? 'Edit' : (formData.draftKind === 'theme' ? 'New Theme' : 'New Session')}</h2>
             <form onSubmit={saveTask}>
               <div className="form-group"><label>Title *</label><input type="text" value={formData.title} onChange={e => setFormData({...formData,title:e.target.value})} required autoFocus/></div>
@@ -4039,7 +4122,7 @@ function App() {
                       }}>Delete permanently</button>
                   </div>
                 )}
-                <button type="button" className="btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                <button type="button" className="btn-secondary" onClick={closeSessionModal}>Cancel</button>
                 <button type="submit" className="btn-primary" style={{width:'auto'}}>Save</button>
               </div>
             </form>
@@ -4649,8 +4732,20 @@ function App() {
               </div>
 
               <div className="theme-roster">
+                <div className="cue-sheet-header">
+                  <div className="cue-sheet-title">Cue Sheet</div>
+                  <div className="cue-sheet-desc">tasks to schedule into a block</div>
+                </div>
+                <div className="cue-add-row">
+                  <input type="text" className="cue-add-input" placeholder="Add a cue…"
+                    value={cueDraft} onChange={e => setCueDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && cueDraft.trim()) { addCueToTheme(viewingThemeId, cueDraft.trim()); setCueDraft(''); } }} />
+                  <button className="cue-add-btn" disabled={!cueDraft.trim()}
+                    onClick={() => { if (cueDraft.trim()) { addCueToTheme(viewingThemeId, cueDraft.trim()); setCueDraft(''); } }}>Add</button>
+                </div>
+
                 <div className="theme-roster-head">
-                  <span>Sessions ({sessions.length + unscheduledForTheme(viewingThemeId).length})</span>
+                  <span className="roster-head-label">Sessions <span className="roster-count">{sessions.length + unscheduledForTheme(viewingThemeId).length}</span></span>
                   <button className="btn-secondary sm" onClick={() => {
                     setViewingThemeId(null);
                     setEditingId(null);
@@ -4661,22 +4756,53 @@ function App() {
                   }}>+ Session</button>
                 </div>
 
-                {sessions.length === 0 && unscheduledForTheme(viewingThemeId).length === 0 && <div className="theme-empty">No sessions yet. Add one to start scheduling work on this theme.</div>}
+                {sessions.length === 0 && unscheduledForTheme(viewingThemeId).length === 0 && <div className="theme-empty">No sessions yet. Add a cue above, or schedule one directly.</div>}
 
                 {(() => {
                   const unsched = unscheduledForTheme(viewingThemeId);
                   if (unsched.length === 0) return null;
                   return (
                     <>
-                      <div className="theme-group-label unsched-label">Unscheduled · to assign</div>
                       {unsched.map(s => (
-                        <div key={s.id} className="theme-session-row unsched-row" onClick={() => { setViewingThemeId(null); openEdit(s, s.startDate); }}>
+                        <div key={s.id}>
+                        <div className="theme-session-row unsched-row">
                           <span className="unsched-dot" style={{background: roleColor(s.role)}} title={roleLabel(s.role)}></span>
                           <div className="theme-session-main">
-                            <div className="theme-session-title">{s.title}</div>
-                            <div className="theme-session-when unsched-when">Needs a time{s.priority && s.priority !== 'medium' ? ` · ${s.priority}` : ''}{s.location ? ` · 📍 ${s.location}` : ''}</div>
+                            <div className="theme-session-title cue-title-link" onClick={(e)=>{ e.stopPropagation(); bookTimeForCue(s, viewingThemeId); }}>{s.title}</div>
+                            <button className="cue-booktime-link" onClick={(e)=>{ e.stopPropagation(); bookTimeForCue(s, viewingThemeId); }}>
+                              Book a time{s.priority && s.priority !== 'medium' ? ` · ${s.priority}` : ''}
+                            </button>
                           </div>
-                          <button className="unsched-schedule" title="Give this a time" onClick={(e)=>{ e.stopPropagation(); setViewingThemeId(null); openEdit(s, s.startDate); }}>Schedule</button>
+                          <div className="cue-row-actions">
+                            <button className="unsched-schedule cue-assign-btn" title="Add this cue into an existing session block"
+                              onClick={(e)=>{ e.stopPropagation(); setAssigningCue(assigningCue === s.id ? null : s.id); }}>
+                              {assigningCue === s.id ? 'Cancel' : '+ Add to Session'}
+                            </button>
+                          </div>
+                        </div>
+                        {assigningCue === s.id && (() => {
+                          const cands = candidateSessionsForCue(s);
+                          return (
+                            <div className="cue-picker">
+                              {cands.length === 0 ? (
+                                <div className="cue-picker-empty">No upcoming {roleLabel(s.role)} sessions. <button className="link-btn" onClick={() => { setAssigningCue(null); bookTimeForCue(s, viewingThemeId); }}>Book a time instead →</button></div>
+                              ) : (
+                                <>
+                                  <div className="cue-picker-label">Add to which session?</div>
+                                  {cands.map(sess => (
+                                    <button key={sess.id} className="cue-picker-option" onClick={() => addCueToSession(s.id, sess.id)}>
+                                      <span className="cue-picker-title">{sess.title}</span>
+                                      <span className="cue-picker-when">
+                                        {sess.startDate ? new Date(sess.startDate+'T00:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) : ''}
+                                        {sess.time ? ` · ${fmtTime(sess.time, use24h)}${sess.endTime ? '–'+fmtTime(sess.endTime, use24h) : ''}` : (sess.allDay ? ' · all day' : '')}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                            </div>
+                          );
+                        })()}
                         </div>
                       ))}
                     </>
@@ -4739,7 +4865,6 @@ function App() {
                     }
                   }}>Delete permanently</button>
                 </div>
-                <button className="btn-secondary" onClick={() => { const th = tasks.find(t=>t.id===viewingThemeId); setViewingThemeId(null); openEdit(th); }}>Edit theme details</button>
                 <button className="btn-secondary" onClick={() => setViewingThemeId(null)}>Cancel</button>
                 <button className="btn-primary" style={{width:'auto'}} onClick={() => setViewingThemeId(null)}>Save</button>
               </div>
@@ -4990,6 +5115,39 @@ function App() {
                   </div>
                 </div>
               )}
+
+              {(() => {
+                const cues = childNodes(t.id); // untimed children = cues assigned into this session
+                if (cues.length === 0) return null;
+                // Capacity: rough check — if the session has a duration, compare it to the cue
+                // count as a light signal, not a hard rule. (Cues have no duration of their own,
+                // so this is just "are you piling a lot into one block?")
+                const durMin = t.time && t.endTime ? (toMinutes(t.endTime) - toMinutes(t.time) + (toMinutes(t.endTime) < toMinutes(t.time) ? 1440 : 0)) : (t.duration ? parseInt(t.duration,10) : 0);
+                const overcommitted = durMin > 0 && cues.length > Math.max(2, Math.floor(durMin / 30));
+                return (
+                  <div className="sv-section sv-cues">
+                    <div className="sv-label">Cue Sheet <span className="sv-cue-count">{cues.length}</span></div>
+                    <div className="sv-cue-list">
+                      {cues.map(c => (
+                        <div key={c.id} className="sv-cue-item">
+                          <button className="sv-cue-check" title="Mark done"
+                            onClick={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, done: !x.done} : x))}>
+                            {c.done ? '☑' : '☐'}
+                          </button>
+                          <span className={`sv-cue-title${c.done ? ' done' : ''}`}>{c.title}</span>
+                          {(() => {
+                            const th = (c.themeIds && c.themeIds[0]) ? getThemes().find(x => x.id === c.themeIds[0]) : null;
+                            return th ? <span className="sv-cue-theme" style={{color: roleColor(th.role)}}>{th.title}</span> : null;
+                          })()}
+                          <button className="sv-cue-remove" title="Remove from this session (back to Cue Sheet)"
+                            onClick={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, parentId: null} : x))}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                    {overcommitted && <div className="sv-cue-capacity">⚠ This block may be overcommitted for its length.</div>}
+                  </div>
+                );
+              })()}
 
               {(localRes.length > 0 || refRes.length > 0) && (
                 <div className="sv-field">
