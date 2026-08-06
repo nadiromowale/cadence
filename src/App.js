@@ -414,6 +414,10 @@ function App() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [viewingThemeId, setViewingThemeId] = useState(null);
   const [cueDraft, setCueDraft] = useState('');
+  // Cues added in the + Theme creation form, before the theme exists (no id yet). They're
+  // held here and committed as real cues, tied to the new theme, on save.
+  const [pendingCues, setPendingCues] = useState([]);
+  const [pendingCueDraft, setPendingCueDraft] = useState('');
   // When set, we're choosing which session to add this cue to (shows the session picker).
   const [assigningCue, setAssigningCue] = useState(null);
 
@@ -1785,7 +1789,21 @@ function App() {
       fired.delete(editingId);
       localStorage.setItem('planner-fired-reminders', JSON.stringify([...fired]));
     } else {
-      setTasks([...tasks, data]);
+      // New task. If it's a new THEME with pending cues from the creation form, create those
+      // cues too, tied to the new theme's id (they had nowhere to attach until now).
+      const isNewTheme = (data.kind === 'weekly' || data.kind === 'project' || data.kind === 'standing') && !data.time && !data.allDay;
+      const cueTasks = (isNewTheme && pendingCues.length > 0)
+        ? pendingCues.map((title, i) => ({
+            id: data.id + 1 + i,
+            title, role: data.role, priority: 'medium',
+            time: '', endTime: '', allDay: false, startDate: '', endDate: '',
+            themeIds: [data.id], parentId: null,
+            notes: '', links: [], tags: [], done: false, isCue: true,
+          }))
+        : [];
+      setTasks([...tasks, data, ...cueTasks]);
+      setPendingCues([]);
+      setPendingCueDraft('');
     }
     setShowModal(false);
     setEditingOccurrenceDate(null);
@@ -1797,6 +1815,8 @@ function App() {
   function closeSessionModal() {
     setShowModal(false);
     setEditingOccurrenceDate(null);
+    setPendingCues([]);
+    setPendingCueDraft('');
     if (returnToTheme != null) {
       const back = returnToTheme;
       setReturnToTheme(null);
@@ -3834,6 +3854,55 @@ function App() {
                 </div>
                 );
               })()}
+
+              {/* Cue Sheet on the + Theme creation form: list the planned work as you set up
+                  the theme. These pending cues have nowhere to attach yet (no theme id), so
+                  they're held in pendingCues and committed on save. Only shown for a NEW theme
+                  draft — an existing theme has its live Cue Sheet in the theme view. */}
+              {(() => {
+                const isThemeDraft = formData.draftKind === 'theme';
+                const taggedToTheme = (formData.themeIds && formData.themeIds.length > 0) || formData.themeId != null;
+                const isNewTheme = !editingId && isThemeDraft && !taggedToTheme && !formData.time && !formData.allDay;
+                if (!isNewTheme) return null;
+                return (
+                  <div className="form-group cue-sheet-formgroup">
+                    <div className="cue-sheet-header">
+                      <div className="cue-sheet-title">Cue Sheet</div>
+                      <div className="cue-sheet-desc">tasks to schedule later (optional)</div>
+                    </div>
+                    <div className="cue-add-row">
+                      <input type="text" className="cue-add-input" placeholder="Add a cue…"
+                        value={pendingCueDraft} onChange={e => setPendingCueDraft(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (pendingCueDraft.trim()) { setPendingCues([...pendingCues, pendingCueDraft.trim()]); setPendingCueDraft(''); } } }} />
+                      <button type="button" className="cue-add-btn" disabled={!pendingCueDraft.trim()}
+                        onClick={() => { if (pendingCueDraft.trim()) { setPendingCues([...pendingCues, pendingCueDraft.trim()]); setPendingCueDraft(''); } }}>Add</button>
+                    </div>
+                    {pendingCues.length > 0 && (
+                      <div className="pending-cues">
+                        {pendingCues.map((c, i) => (
+                          <div key={i} className="theme-session-row unsched-row pending-cue-row">
+                            <span className="unsched-dot" style={{background: roleColor(formData.role)}} title={roleLabel(formData.role)}></span>
+                            <div className="theme-session-main">
+                              <div className="theme-session-title">{c}</div>
+                              <div className="theme-session-when unsched-when">Cue · saved with theme</div>
+                            </div>
+                            <button type="button" className="pending-cue-remove" onClick={() => setPendingCues(pendingCues.filter((_, j) => j !== i))}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {(() => {
+                // Background + All-day are SESSION properties (a theme has no time, so they're
+                // meaningless for it). Hide both when the form is a theme — new draft or existing.
+                const o = editingId ? tasks.find(t => t.id === editingId) : null;
+                const editingTheme = o && (o.kind === 'weekly' || o.kind === 'project' || o.kind === 'standing');
+                const draftTheme = formData.draftKind === 'theme';
+                if (editingTheme || draftTheme) return null;
+                return (
+                <>
               <div className="form-group bg-toggle">
                 <label className="checkbox-label">
                   <input type="checkbox" checked={formData.isBackground} onChange={e => setFormData({...formData, isBackground: e.target.checked})} />
@@ -3846,6 +3915,9 @@ function App() {
                   All day (claims the whole day with no set time; the Conductor asks before booking over it. Check Background for a passive backdrop like a trip or holiday.)
                 </label>
               </div>
+                </>
+                );
+              })()}
               {/* Session-only scheduling. A theme uses its own "Starts/Ends (week of)"
                   range above; showing these session date/time fields too gave a theme
                   TWO sets of dates. Hide them when editing a theme. */}

@@ -1681,3 +1681,17 @@ textarea { resize: vertical; }
 /* Cue title is clickable (opens the cue), same action as Book a time */
 .cue-title-link { cursor: pointer; }
 .cue-title-link:hover { text-decoration: underline; }
+
+/* Pending cues in the + Theme creation form — use the shared cue-row look (theme-session-row
+   / unsched-row), so they match saved cues exactly. Only the trailing × differs. */
+.pending-cues { margin-top: 7px; }
+.pending-cue-row .theme-session-when { opacity: 0.6; }
+.pending-cue-remove { background: none; border: none; color: var(--ink-3); cursor: pointer; font-size: 18px; line-height: 1; opacity: 0.55; padding: 0 2px; flex-shrink: 0; }
+.pending-cue-remove:hover { opacity: 1; }
+
+/* Cue Sheet header inside the +Theme form: match the theme-view header spacing */
+.cue-sheet-formgroup .cue-sheet-header { margin: 0 0 6px; }
+.cue-sheet-formgroup .cue-sheet-title { font-size: 15px; }
+
+/* Keep the add-cue row spacing in the form */
+.cue-sheet-formgroup .cue-add-row { margin-top: 5px; }
