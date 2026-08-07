@@ -507,6 +507,24 @@ function App() {
   // When editing a cue from a theme's Cue Sheet, remember to reopen the theme afterward
   // instead of closing to the calendar.
   const [returnToTheme, setReturnToTheme] = useState(null);
+  // Custom Conductor conflict dialog (native confirm can't do 3 buttons). When set:
+  // { title, time, crossRole, onAdd, onNew } — buttons Add to Session / Create New Session / Cancel.
+  const [conductorPrompt, setConductorPrompt] = useState(null);
+
+  // Gate an action behind the Conductor conflict dialog. Clear slot → proceed('new') runs now.
+  // Conflict → open the dialog; its buttons call proceed('add', conflictId) to nest into the
+  // conflicting session, proceed('new') to keep it as its own session, or nothing (cancel).
+  function runWithConductor(check, proceed) {
+    if (!check || check.kind !== 'conflict') { proceed('new'); return; }
+    setConductorPrompt({
+      title: check.conflictTitle,
+      time: check.conflictTime,
+      crossRole: check.crossRole,
+      onAdd: () => { setConductorPrompt(null); proceed('add', check.conflictId); },
+      onNew: () => { setConductorPrompt(null); proceed('new'); },
+    });
+  }
+
   function closeThemeView() {
     const back = returnToDrawer;
     setReturnToDrawer(null);
@@ -1322,7 +1340,7 @@ function App() {
       const first = hits[0].t;
       const crossRole = hits.some(h => h.t.role !== roleId);
       const free = nearestFreeSlot(roleId, dateStr, durationMin, excludeId);
-      return { kind: 'conflict', crossRole, conflictTitle: first.title, conflictTime: hits[0].label,
+      return { kind: 'conflict', crossRole, conflictTitle: first.title, conflictTime: hits[0].label, conflictId: first.id,
         text: `Conflicts with ${hits.map(h => h.label).join(', ')}${crossRole ? ' \u00b7 includes a different role' : ''}. Schedule anyway?`, free };
     }
     return { kind: 'clear', text: 'Conductor \u00b7 this slot is clear' };
@@ -1752,34 +1770,44 @@ function App() {
     }
     const data = buildTaskData();
 
-    // conflict check
+    // The work that finishes a save once any conflict decision is made. mode 'add' nests this
+    // into the conflicting session (no time of its own); 'new' keeps it as its own timed
+    // session (normal save, respecting series/span scope prompts).
+    const proceedSave = (mode, parentSessionId) => {
+      if (mode === 'add' && parentSessionId != null) {
+        commitSave({ ...data, parentId: parentSessionId, time: '', endTime: '', duration: '', done: false });
+        return;
+      }
+      const original = editingId ? tasks.find(t => t.id === editingId) : null;
+      const isSeries = original && original.repeat && original.repeat.freq !== 'none';
+      const isMultiDaySpan = original && !isSeries && original.endDate && original.endDate !== original.startDate;
+      const timeChanged = original && (original.time !== data.time || original.endTime !== data.endTime);
+      if (isSeries && editingOccurrenceDate) {
+        setPendingSave({ data, original, occ: editingOccurrenceDate, kind: 'series' });
+        return;
+      }
+      if (isMultiDaySpan && timeChanged && editingOccurrenceDate) {
+        setPendingSave({ data, original, occ: editingOccurrenceDate, kind: 'span' });
+        return;
+      }
+      commitSave(data);
+    };
+
+    // conflict check -> Conductor dialog (Add to Session / Create New Session / Cancel)
     const conflicts = data.isBackground ? [] : findConflicts(data);
     if (conflicts.length > 0) {
-      const names = conflicts.slice(0,3).map(c => `“${c.title}” (${fmtTime(c.time, use24h)})`).join(', ');
-      const more = conflicts.length > 3 ? ` and ${conflicts.length-3} more` : '';
-      const ok = window.confirm(`Heads up — this overlaps ${names}${more}.\n\nAdd it anyway?`);
-      if (!ok) return;
+      const themeToReturn = returnToTheme; // capture so we can keep the theme open after the choice
+      const reopenTheme = () => { if (themeToReturn != null) setTimeout(() => setViewingThemeId(themeToReturn), 0); };
+      setConductorPrompt({
+        title: '\u201c' + conflicts[0].title + '\u201d',
+        time: fmtTime(conflicts[0].time, use24h),
+        crossRole: conflicts[0].role !== data.role,
+        onAdd: () => { setConductorPrompt(null); proceedSave('add', conflicts[0].id); reopenTheme(); },
+        onNew: () => { setConductorPrompt(null); proceedSave('new'); reopenTheme(); },
+      });
+      return; // dialog resumes the save via a button
     }
-
-    const original = editingId ? tasks.find(t => t.id === editingId) : null;
-    const isSeries = original && original.repeat && original.repeat.freq !== 'none';
-    const isMultiDaySpan = original && !isSeries && original.endDate && original.endDate !== original.startDate;
-    const timeChanged = original && (original.time !== data.time || original.endTime !== data.endTime);
-
-    // editing one occurrence of a repeating series → ask scope
-    if (isSeries && editingOccurrenceDate) {
-      setPendingSave({ data, original, occ: editingOccurrenceDate, kind: 'series' });
-      return; // scope modal will finish the save
-    }
-
-    // editing the time on a multi-day span → ask whether to move just this day or the whole span
-    if (isMultiDaySpan && timeChanged && editingOccurrenceDate) {
-      setPendingSave({ data, original, occ: editingOccurrenceDate, kind: 'span' });
-      return;
-    }
-
-    // normal save (new task, or whole-series edit of a non-occurrence context)
-    commitSave(data);
+    proceedSave('new');
   }
 
   function commitSave(data) {
@@ -3735,6 +3763,22 @@ function App() {
       </div>
 
       {/* TASK MODAL */}
+      {conductorPrompt && (
+        <div className="modal-overlay conductor-overlay" onClick={() => setConductorPrompt(null)}>
+          <div className="conductor-dialog" onClick={e => e.stopPropagation()}>
+            <div className="conductor-dialog-title">Conductor</div>
+            <div className="conductor-dialog-body">
+              This lands on <strong>{conductorPrompt.title}</strong> ({conductorPrompt.time}){conductorPrompt.crossRole ? ', a different role' : ''}.
+            </div>
+            <div className="conductor-dialog-actions">
+              <button className="conductor-btn add" onClick={conductorPrompt.onAdd}>Add to Session</button>
+              <button className="conductor-btn newsession" onClick={conductorPrompt.onNew}>Create New Session</button>
+              <button className="conductor-btn cancel" onClick={() => setConductorPrompt(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -4703,7 +4747,39 @@ function App() {
         if (!theme) return null;
         const sessions = sessionsForTheme(viewingThemeId).slice().sort((a,b) => (a.startDate+a.time).localeCompare(b.startDate+b.time));
         const todayStr = fmtInput(new Date());
-        const upcoming = sessions.filter(s => !s.done && (s.endDate||s.startDate) >= todayStr);
+        // Cues nested INTO a session (via Add to Session) are still this theme's work. Surface
+        // them so nothing falls through the cracks: show each with its PARENT session's date/
+        // time, flagged as part of that session. It stays visible in the theme for project
+        // management even though it has no time of its own.
+        // For a nested cue's parent, find the date to show. For a one-off session that's its
+        // startDate. For a RECURRING session the stored startDate is the series START (often
+        // past), so walk forward from today to the next occurrence — otherwise the nested cue
+        // looks "past" and wrongly drops out of Upcoming.
+        const parentEffectiveDate = (parent) => {
+          const isRecurring = parent.repeat && parent.repeat.freq && parent.repeat.freq !== 'none';
+          if (!isRecurring) return parent.startDate;
+          for (let i = 0; i < 366; i++) {
+            const d = fmtInput(addDays(todayStr, i));
+            if (occursOn(parent, d)) return d;
+          }
+          return parent.startDate;
+        };
+        const nestedCues = tasks.filter(c => {
+          if (c.time || c.allDay || c.done) return false;
+          if (c.parentId == null) return false;
+          const ids = c.themeIds || (c.themeId ? [c.themeId] : []);
+          if (!ids.includes(viewingThemeId)) return false;
+          const parent = tasks.find(p => p.id === c.parentId);
+          return parent && (parent.time || parent.allDay); // nested inside a real session
+        }).map(c => {
+          const parent = tasks.find(p => p.id === c.parentId);
+          const eff = parentEffectiveDate(parent);
+          return { ...c, _nested: true, _parentTitle: parent.title,
+            startDate: eff, endDate: eff, time: parent.time, endTime: parent.endTime, allDay: parent.allDay };
+        });
+        const upcoming = [...sessions, ...nestedCues]
+          .filter(s => !s.done && (s.endDate||s.startDate) >= todayStr)
+          .sort((a,b) => ((a.startDate||'')+(a.time||'')).localeCompare((b.startDate||'')+(b.time||'')));
         const past = sessions.filter(s => s.done || (s.endDate||s.startDate) < todayStr);
         return (
           <div className="modal-overlay" onClick={closeThemeView}>
@@ -4836,45 +4912,14 @@ function App() {
                   return (
                     <>
                       {unsched.map(s => (
-                        <div key={s.id}>
-                        <div className="theme-session-row unsched-row">
+                        <div key={s.id} className="theme-session-row unsched-row">
                           <span className="unsched-dot" style={{background: roleColor(s.role)}} title={roleLabel(s.role)}></span>
                           <div className="theme-session-main">
                             <div className="theme-session-title cue-title-link" onClick={(e)=>{ e.stopPropagation(); bookTimeForCue(s, viewingThemeId); }}>{s.title}</div>
                             <button className="cue-booktime-link" onClick={(e)=>{ e.stopPropagation(); bookTimeForCue(s, viewingThemeId); }}>
-                              Book a time{s.priority && s.priority !== 'medium' ? ` · ${s.priority}` : ''}
+                              Book a time{s.priority && s.priority !== 'medium' ? ` \u00b7 ${s.priority}` : ''}
                             </button>
                           </div>
-                          <div className="cue-row-actions">
-                            <button className="unsched-schedule cue-assign-btn" title="Add this cue into an existing session block"
-                              onClick={(e)=>{ e.stopPropagation(); setAssigningCue(assigningCue === s.id ? null : s.id); }}>
-                              {assigningCue === s.id ? 'Cancel' : '+ Add to Session'}
-                            </button>
-                          </div>
-                        </div>
-                        {assigningCue === s.id && (() => {
-                          const cands = candidateSessionsForCue(s);
-                          return (
-                            <div className="cue-picker">
-                              {cands.length === 0 ? (
-                                <div className="cue-picker-empty">No upcoming {roleLabel(s.role)} sessions. <button className="link-btn" onClick={() => { setAssigningCue(null); bookTimeForCue(s, viewingThemeId); }}>Book a time instead →</button></div>
-                              ) : (
-                                <>
-                                  <div className="cue-picker-label">Add to which session?</div>
-                                  {cands.map(sess => (
-                                    <button key={sess.id} className="cue-picker-option" onClick={() => addCueToSession(s.id, sess.id)}>
-                                      <span className="cue-picker-title">{sess.title}</span>
-                                      <span className="cue-picker-when">
-                                        {sess.startDate ? new Date(sess.startDate+'T00:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) : ''}
-                                        {sess.time ? ` · ${fmtTime(sess.time, use24h)}${sess.endTime ? '–'+fmtTime(sess.endTime, use24h) : ''}` : (sess.allDay ? ' · all day' : '')}
-                                      </span>
-                                    </button>
-                                  ))}
-                                </>
-                              )}
-                            </div>
-                          );
-                        })()}
                         </div>
                       ))}
                     </>
@@ -4883,11 +4928,11 @@ function App() {
 
                 {upcoming.length > 0 && <div className="theme-group-label">Upcoming</div>}
                 {upcoming.map(s => (
-                  <div key={s.id} className="theme-session-row" onClick={() => { setViewingThemeId(null); openEdit(s, s.startDate); }}>
+                  <div key={s.id} className={`theme-session-row${s._nested ? ' nested-cue-row' : ''}`} onClick={() => { const real = tasks.find(t => t.id === s.id) || s; setViewingThemeId(null); openEdit(real, real.startDate); }}>
                     <input type="checkbox" checked={!!s.done} onClick={e=>e.stopPropagation()} onChange={e => { e.stopPropagation(); setTasks(tasks.map(t => t.id===s.id ? {...t, done: e.target.checked} : t)); }} />
                     <div className="theme-session-main">
                       <div className="theme-session-title"><span className="session-role-dot" style={{background: roleColor(s.role)}} title={roleLabel(s.role)}></span>{s.title}</div>
-                      <div className="theme-session-when">{parseLocalDate(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}{(() => { const p = s.parentId && s.parentId !== theme.id ? tasks.find(t=>t.id===s.parentId) : null; return p ? <span className="session-under"> · under {p.title}</span> : null; })()}</div>
+                      <div className="theme-session-when">{parseLocalDate(s.startDate).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {fmtTime(s.time, use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}{s._nested ? <span className="session-under"> · part of {s._parentTitle}</span> : (() => { const p = s.parentId && s.parentId !== theme.id ? tasks.find(t=>t.id===s.parentId) : null; return p ? <span className="session-under"> · under {p.title}</span> : null; })()}</div>
                       {s.links && <div className="session-row-links">{linkifyNotes(Array.isArray(s.links) ? s.links.join('  ') : s.links)}</div>}
                       {s.location && <div className="session-row-loc">📍 {linkifyNotes(s.location)}</div>}
                     </div>

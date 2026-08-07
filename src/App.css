@@ -1695,3 +1695,19 @@ textarea { resize: vertical; }
 
 /* Keep the add-cue row spacing in the form */
 .cue-sheet-formgroup .cue-add-row { margin-top: 5px; }
+
+/* Conductor 3-button conflict dialog (replaces native confirm for scheduling overlaps) */
+.conductor-overlay { display: flex; align-items: center; justify-content: center; z-index: 2000; }
+.conductor-dialog { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); max-width: 380px; width: calc(100% - 48px); padding: 20px; }
+.conductor-dialog-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--accent); margin-bottom: 8px; }
+.conductor-dialog-body { font-size: 15px; color: var(--ink); line-height: 1.45; margin-bottom: 18px; }
+.conductor-dialog-actions { display: flex; flex-direction: column; gap: 8px; }
+.conductor-btn { width: 100%; padding: 11px 14px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; border: 1px solid var(--line); }
+.conductor-btn.add { background: var(--accent); color: #fff; border-color: var(--accent); }
+.conductor-btn.newsession { background: var(--paper-2); color: var(--ink); }
+.conductor-btn.cancel { background: none; color: var(--ink-3); border-color: transparent; }
+.conductor-btn.cancel:hover { color: var(--ink); }
+
+/* A cue nested into a session, shown in its theme's Upcoming list (part of that session) */
+.nested-cue-row { opacity: 0.9; }
+.nested-cue-row .session-under { font-style: italic; opacity: 0.75; }
