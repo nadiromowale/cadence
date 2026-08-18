@@ -411,9 +411,11 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [editingOccurrenceDate, setEditingOccurrenceDate] = useState(null);
   const [pendingSave, setPendingSave] = useState(null);
+  const [pendingUnschedule, setPendingUnschedule] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [viewingThemeId, setViewingThemeId] = useState(null);
   const [cueDraft, setCueDraft] = useState('');
+  const [sessionCueDraft, setSessionCueDraft] = useState('');
   // Cues added in the + Theme creation form, before the theme exists (no id yet). They're
   // held here and committed as real cues, tied to the new theme, on save.
   const [pendingCues, setPendingCues] = useState([]);
@@ -1217,6 +1219,67 @@ function App() {
     setTasks(prev => [...prev, cue]);
   }
 
+  // Add a cue directly to a SESSION (from inside the session view). This closes the role-based
+  // block gap: a role session with no theme can still hold first-class cues. The cue is a child
+  // of the session (parentId), untimed (the block owns the time), inherits the session's role,
+  // and carries the session's theme tags if it has any (so it stays visible in that theme too).
+  function addCueDirectlyToSession(sessionId, title) {
+    const session = tasks.find(t => t.id === sessionId);
+    if (!session) return;
+    const cue = {
+      id: Date.now() + Math.floor(Math.random()*1000),
+      title, role: session.role, priority: 'medium',
+      time: '', endTime: '', allDay: false,
+      startDate: '', endDate: '',
+      themeIds: session.themeIds ? [...session.themeIds] : [],
+      parentId: sessionId,
+      notes: '', links: [], tags: [], done: false,
+      isCue: true,
+    };
+    setTasks(prev => [...prev, cue]);
+  }
+
+  // Renders a session's Cue Sheet (its contained cues + add-a-cue), using the SAME styling as
+  // the theme Cue Sheet so all four surfaces match. Shared by the session INFO view and the
+  // session EDIT form so they can't drift.
+  function renderSessionCueSheet(session) {
+    if (!session) return null;
+    const cues = childNodes(session.id);
+    const durMin = session.time && session.endTime ? (toMinutes(session.endTime) - toMinutes(session.time) + (toMinutes(session.endTime) < toMinutes(session.time) ? 1440 : 0)) : (session.duration ? parseInt(session.duration,10) : 0);
+    const overcommitted = durMin > 0 && cues.length > Math.max(2, Math.floor(durMin / 30));
+    return (
+      <div className="theme-roster session-cue-sheet">
+        <div className="cue-sheet-header">
+          <div className="cue-sheet-title">Cue Sheet{cues.length > 0 ? <span className="roster-count" style={{marginLeft:6}}>{cues.length}</span> : null}</div>
+          <div className="cue-sheet-desc">work to do during this block</div>
+        </div>
+        <div className="cue-add-row">
+          <input type="text" className="cue-add-input" placeholder="Add a cue…"
+            value={sessionCueDraft} onChange={e => setSessionCueDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && sessionCueDraft.trim()) { addCueDirectlyToSession(session.id, sessionCueDraft.trim()); setSessionCueDraft(''); } }} />
+          <button className="cue-add-btn" disabled={!sessionCueDraft.trim()}
+            onClick={() => { if (sessionCueDraft.trim()) { addCueDirectlyToSession(session.id, sessionCueDraft.trim()); setSessionCueDraft(''); } }}>Add</button>
+        </div>
+        {cues.map(c => (
+          <div key={c.id} className="theme-session-row unsched-row">
+            <input type="checkbox" className="cue-check" checked={!!c.done}
+              onChange={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, done: !x.done} : x))} />
+            <div className="theme-session-main">
+              <div className={`theme-session-title${c.done ? ' cue-done' : ''}`}>{c.title}</div>
+              {(() => {
+                const th = (c.themeIds && c.themeIds[0]) ? getThemes().find(x => x.id === c.themeIds[0]) : null;
+                return th ? <div className="theme-session-when" style={{color: roleColor(th.role)}}>{th.title}</div> : null;
+              })()}
+            </div>
+            <button className="unsched-schedule" title="Remove from this session"
+              onClick={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, parentId: null} : x))}>Remove</button>
+          </div>
+        ))}
+        {overcommitted && <div className="sv-cue-capacity">⚠ This block may be overcommitted for its length.</div>}
+      </div>
+    );
+  }
+
   function unscheduledForTheme(themeId) {
     const treeIds = subtreeItemIds(themeId);
     const theme = tasks.find(t => t.id === themeId);
@@ -1924,7 +1987,12 @@ function App() {
     setEditingOccurrenceDate(null);
   }
 
-  function deleteTask(id) { setTasks(tasks.filter(t => t.id !== id)); }
+  // Compare ids tolerantly: a malformed record (id stored as string on one device, number on
+  // another, etc.) otherwise slips past strict === and becomes undeletable until an
+  // export/import round-trip. Coerce both sides to string for the comparison.
+  function sameId(a, b) { return a != null && b != null && String(a) === String(b); }
+
+  function deleteTask(id) { setTasks(tasks.filter(t => !sameId(t.id, id))); }
 
   function requestDelete() {
     const original = editingId ? tasks.find(t => t.id === editingId) : null;
@@ -2359,7 +2427,15 @@ function App() {
   // waiting to be assigned. Keeps title, role, priority, location, notes, resources;
   // only the clock date/time are removed. If deltaWeeks is given, it parks in that
   // week's planning (e.g. push to next week); otherwise it stays in its current week.
-  function unscheduleSession(sessionId, deltaWeeks) {
+  function unscheduleSession(sessionId, deltaWeeks, scopeChosen) {
+    const target = tasks.find(t => t.id === sessionId);
+    const isRecurring = target && target.repeat && target.repeat.freq && target.repeat.freq !== 'none';
+    // A recurring session must ask: just this occurrence, or the whole series? Unscheduling
+    // silently used to wipe the entire series (data loss). Route through the scope prompt.
+    if (isRecurring && !scopeChosen) {
+      setPendingUnschedule({ sessionId, deltaWeeks: deltaWeeks || 0, occ: editingOccurrenceDate || (viewingSession && viewingSession.date) || target.startDate });
+      return;
+    }
     setTasks(prev => prev.map(t => {
       if (t.id !== sessionId) return t;
       const base = t.startDate ? getMonday(new Date(t.startDate + 'T00:00:00')) : currentWeekStart;
@@ -2371,10 +2447,39 @@ function App() {
         startDate: wk, endDate: '',
         themeWeek: wk,
         done: false,
-        // if it was a recurring occurrence, folding back detaches it from the series
         repeat: undefined, skipDates: undefined,
       };
     }));
+  }
+
+  // Unschedule scope: 'all' = the whole series becomes unscheduled work (old behavior);
+  // 'this' = only this occurrence is unscheduled — the series keeps running (that date is
+  // skipped on the master, and a single unscheduled copy is spun off for that occurrence).
+  function applyUnscheduleScope(scope) {
+    if (!pendingUnschedule) return;
+    const { sessionId, deltaWeeks, occ } = pendingUnschedule;
+    if (scope === 'all') {
+      unscheduleSession(sessionId, deltaWeeks, true);
+    } else if (scope === 'this') {
+      setTasks(prev => {
+        const master = prev.find(t => t.id === sessionId);
+        if (!master) return prev;
+        const base = occ ? getMonday(new Date(occ + 'T00:00:00')) : currentWeekStart;
+        const d = new Date(base); d.setDate(d.getDate() + (deltaWeeks || 0) * 7);
+        const wk = fmtInput(getMonday(d));
+        const skipped = { ...master, skipDates: [...(master.skipDates || []), occ] };
+        const single = {
+          ...master, id: Date.now() + 1,
+          time: '', endTime: '', duration: '', allDay: false,
+          startDate: wk, endDate: '', themeWeek: wk, done: false,
+          repeat: undefined, skipDates: undefined,
+        };
+        return prev.map(t => t.id === sessionId ? skipped : t).concat([single]);
+      });
+    }
+    setPendingUnschedule(null);
+    setViewingSession(null);
+    setShowModal(false);
   }
   function pushSessionToWeek(sessionId) { unscheduleSession(sessionId, 1); }
 
@@ -4051,8 +4156,21 @@ function App() {
                   </div>
                 )}
               </div>
-              <div className="form-group"><label>Tags (comma-separated)</label><input type="text" value={formData.tags} onChange={e => setFormData({...formData,tags:e.target.value})} placeholder="release, urgent"/></div>
+
+              {(() => {
+                // Cue Sheet — the work to be done during this session. Sits right under Location
+                // (it's the substance of the block). Existing sessions only, not themes. Shared
+                // renderer so it matches the info view and theme Cue Sheet exactly.
+                if (!editingId) return null;
+                const editing = tasks.find(x => x.id === editingId);
+                if (!editing) return null;
+                const isTheme = editing.kind === 'weekly' || editing.kind === 'project' || editing.kind === 'standing';
+                if (isTheme) return null;
+                return renderSessionCueSheet(editing);
+              })()}
+
               <div className="form-group"><label>Notes <span className="field-hint-inline">**bold** *italic* &nbsp;- bullet&nbsp; 1. numbered</span></label><textarea className="notes-field" value={formData.notes} onChange={e => setFormData({...formData,notes:e.target.value})} rows="7" placeholder="Longer notes go here — drag the bottom corner to make this bigger."/></div>
+              <div className="form-group"><label>Tags (comma-separated)</label><input type="text" value={formData.tags} onChange={e => setFormData({...formData,tags:e.target.value})} placeholder="release, urgent"/></div>
               <div className="form-group">
                 <label>Resources</label>
                 {/* attached library references */}
@@ -4216,12 +4334,13 @@ function App() {
                   </div>
                 )}
               </div>
+
               <div className="modal-actions">
                 {editingId && (
                   <div className="destructive-stack">
                     <button type="button" className="btn-archive" title="Keep it, but hide it from active views (find it in Settings → Archive)"
                       onClick={() => {
-                        setTasks(prev => prev.map(t => t.id === editingId ? { ...t, done: true } : t));
+                        setTasks(prev => prev.map(t => sameId(t.id, editingId) ? { ...t, done: true } : t));
                         setShowModal(false);
                         setEditingOccurrenceDate(null);
                       }}>Archive</button>
@@ -4716,7 +4835,25 @@ function App() {
         </div>
       )}
 
-      {/* REPEAT DELETE SCOPE MODAL */}
+      {pendingUnschedule && (
+        <div className="modal-overlay" onClick={() => setPendingUnschedule(null)}>
+          <div className="modal-content scope-modal" onClick={e => e.stopPropagation()}>
+            <h2 className="modal-header">Unschedule repeating session</h2>
+            <p className="scope-text">This is part of a repeating series. Unschedule:</p>
+            <div className="scope-options">
+              <button className="scope-btn" onClick={() => applyUnscheduleScope('this')}>
+                <strong>Just this one</strong>
+                <span>Only this occurrence becomes unscheduled; the series keeps running</span>
+              </button>
+              <button className="scope-btn" onClick={() => applyUnscheduleScope('all')}>
+                <strong>The whole series</strong>
+                <span>Every occurrence is removed and folded back as unscheduled work</span>
+              </button>
+            </div>
+            <button className="btn-secondary" onClick={() => setPendingUnschedule(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
       {pendingDelete && (
         <div className="modal-overlay" onClick={() => setPendingDelete(null)}>
           <div className="modal-content scope-modal" onClick={e => e.stopPropagation()}>
@@ -4959,7 +5096,7 @@ function App() {
                 <div className="destructive-stack">
                   <button className="btn-archive" title="Keep it, but close it out (find it in Settings → Archive)"
                     onClick={() => {
-                      setTasks(prev => prev.map(t => t.id === theme.id ? { ...t, done: true } : t));
+                      setTasks(prev => prev.map(t => sameId(t.id, theme.id) ? { ...t, done: true } : t));
                       closeThemeView();
                     }}>Archive</button>
                   <button className="btn-delete-tiny" onClick={() => {
@@ -5233,38 +5370,7 @@ function App() {
                 </div>
               )}
 
-              {(() => {
-                const cues = childNodes(t.id); // untimed children = cues assigned into this session
-                if (cues.length === 0) return null;
-                // Capacity: rough check — if the session has a duration, compare it to the cue
-                // count as a light signal, not a hard rule. (Cues have no duration of their own,
-                // so this is just "are you piling a lot into one block?")
-                const durMin = t.time && t.endTime ? (toMinutes(t.endTime) - toMinutes(t.time) + (toMinutes(t.endTime) < toMinutes(t.time) ? 1440 : 0)) : (t.duration ? parseInt(t.duration,10) : 0);
-                const overcommitted = durMin > 0 && cues.length > Math.max(2, Math.floor(durMin / 30));
-                return (
-                  <div className="sv-section sv-cues">
-                    <div className="sv-label">Cue Sheet <span className="sv-cue-count">{cues.length}</span></div>
-                    <div className="sv-cue-list">
-                      {cues.map(c => (
-                        <div key={c.id} className="sv-cue-item">
-                          <button className="sv-cue-check" title="Mark done"
-                            onClick={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, done: !x.done} : x))}>
-                            {c.done ? '☑' : '☐'}
-                          </button>
-                          <span className={`sv-cue-title${c.done ? ' done' : ''}`}>{c.title}</span>
-                          {(() => {
-                            const th = (c.themeIds && c.themeIds[0]) ? getThemes().find(x => x.id === c.themeIds[0]) : null;
-                            return th ? <span className="sv-cue-theme" style={{color: roleColor(th.role)}}>{th.title}</span> : null;
-                          })()}
-                          <button className="sv-cue-remove" title="Remove from this session (back to Cue Sheet)"
-                            onClick={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, parentId: null} : x))}>×</button>
-                        </div>
-                      ))}
-                    </div>
-                    {overcommitted && <div className="sv-cue-capacity">⚠ This block may be overcommitted for its length.</div>}
-                  </div>
-                );
-              })()}
+              {renderSessionCueSheet(t)}
 
               {(localRes.length > 0 || refRes.length > 0) && (
                 <div className="sv-field">

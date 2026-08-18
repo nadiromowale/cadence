@@ -1711,3 +1711,11 @@ textarea { resize: vertical; }
 /* A cue nested into a session, shown in its theme's Upcoming list (part of that session) */
 .nested-cue-row { opacity: 0.9; }
 .nested-cue-row .session-under { font-style: italic; opacity: 0.75; }
+
+/* Add-a-cue input inside the session view Cue Sheet */
+.sv-cue-add { margin-top: 8px; }
+
+/* Session Cue Sheet (shared by info view + edit form), matches theme Cue Sheet styling */
+.session-cue-sheet { margin-top: 14px; }
+.session-cue-sheet .cue-check { margin: 0 2px 0 0; flex-shrink: 0; }
+.session-cue-sheet .theme-session-title.cue-done { text-decoration: line-through; opacity: 0.5; }
