@@ -184,7 +184,10 @@ function layoutDayEvents(events) {
     if (e.endTime) end = toMinutes(e.endTime);
     else if (e.duration) end = start + parseInt(e.duration, 10);
     else end = start + 60;
-    if (end <= start) end = start + 30;
+    // A session whose end is at/before its start crosses midnight (e.g. 8pm→2am). Add a full
+    // day so it renders its true length on the start day (to end-of-day) instead of collapsing
+    // to a sliver. (The old `end = start + 30` fallback mis-drew every crossing as ~30 min.)
+    if (end <= start) end += 1440;
     return { e, start, end };
   }).sort((a, b) => a.start - b.start || b.end - a.end);
 
@@ -618,10 +621,20 @@ function App() {
   // than listing each by hand, so nothing is missed now or as new keys are added.
   // (fired-reminders is transient dedup state — not worth carrying between devices.)
   function collectData() {
+    // Keys that must NEVER be included in an export/backup. The AI provider API key is a
+    // secret credential — it belongs only in this browser's localStorage, never in a file
+    // that could be shared, uploaded, or synced. (planner-ai-provider is just "anthropic"/
+    // "openai"/"gemini", not secret, but there's no reason to carry it either.)
+    const EXCLUDE = new Set([
+      'planner-fired-reminders',
+      'planner-last-export',
+      'planner-ai-key',       // SECRET — never export
+      'planner-ai-provider',
+    ]);
     const data = {};
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith('planner-') && k !== 'planner-fired-reminders' && k !== 'planner-last-export') {
+      if (k && k.startsWith('planner-') && !EXCLUDE.has(k)) {
         data[k] = localStorage.getItem(k);
       }
     }
@@ -682,7 +695,11 @@ function App() {
         URL.revokeObjectURL(url);
       } catch {}
 
-      // Replace: clear existing planner-* keys, then write the imported ones.
+      // Replace: clear existing planner-* keys, then write the imported ones. BUT preserve the
+      // AI key/provider — they're this-browser-only secrets that exports (correctly) don't
+      // carry, so without this an import would wipe your key and force re-entry every time.
+      const preserveKey = localStorage.getItem('planner-ai-key');
+      const preserveProvider = localStorage.getItem('planner-ai-provider');
       const toRemove = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
@@ -690,6 +707,8 @@ function App() {
       }
       toRemove.forEach(k => localStorage.removeItem(k));
       Object.entries(payload.data).forEach(([k, v]) => localStorage.setItem(k, v));
+      if (preserveKey) localStorage.setItem('planner-ai-key', preserveKey);
+      if (preserveProvider) localStorage.setItem('planner-ai-provider', preserveProvider);
       // Reload so every piece of state re-reads from the fresh localStorage cleanly.
       window.location.reload();
     };
@@ -1664,7 +1683,10 @@ function App() {
     // A timed item is always a session; a theme carries a real kind and no time. This
     // drives which controls show. Without it a plain session defaulted to kind:'weekly'
     // and wrongly rendered the Theme-type selector (and could confuse the Conductor).
-    const isRealTheme = !task.time && (task.kind === 'weekly' || task.kind === 'project' || task.kind === 'standing');
+    // A BACKGROUND or ALL-DAY item is always a SESSION (it has no clock time but it's a
+    // block on the calendar, not a theme) — otherwise the "no time = theme" heuristic
+    // misfires and hides the Background/All-day checkboxes so you can't turn them back off.
+    const isRealTheme = !task.time && !task.isBackground && !task.allDay && (task.kind === 'weekly' || task.kind === 'project' || task.kind === 'standing');
     setFormData({
       title: task.title, role: task.role, priority: task.priority, isBackground: !!task.isBackground,
       themeIds: task.themeIds || (task.themeId ? [task.themeId] : []), done: !!task.done, allDay: !!task.allDay,
@@ -2718,7 +2740,9 @@ function App() {
             const end = info.end !== undefined ? info.end : start + 60;
             const col = info.col || 0;
             const cols = info.cols || 1;
-            const dur = Math.max(20, end - start);
+            const crossesMidnight = end > 1440;
+            const drawnEnd = Math.min(end, 1440);
+            const dur = Math.max(20, drawnEnd - start);
             const past = t.done || isSessionPast(t, dateStr);
             // Inset from the left so the background session peeks out behind, like desktop.
             const widthPct = 100 / cols;
@@ -2734,6 +2758,7 @@ function App() {
                 onClick={(e) => { e.stopPropagation(); openSessionView(t, dateStr); }}>
                 <div className="m-tl-clip-title">{t.done && '✓ '}{t.title}</div>
                 <div className="m-tl-clip-time">{fmtTime(t.time, use24h)}{t.endTime ? `–${fmtTime(t.endTime, use24h)}` : ''}</div>
+                {crossesMidnight && <div className="event-continues">↓ past midnight</div>}
               </div>
             );
           })}
@@ -2806,7 +2831,7 @@ function App() {
       const evs = sessions.map(s => {
         const start = toMinutes(s.time);
         let end = s.endTime ? toMinutes(s.endTime) : (s.duration ? start+parseInt(s.duration,10) : start+60);
-        if (end <= start) end = start+30;
+        if (end <= start) end += 1440; // crosses midnight → span to true length, not a sliver
         return { s, start, end };
       }).sort((a,b)=>a.start-b.start);
       // assign rows so overlapping sessions stack
@@ -3684,9 +3709,9 @@ function App() {
                       {bgEvents.map(t => {
                         const start = toMinutes(t.time);
                         let end = t.endTime ? toMinutes(t.endTime) : (t.duration ? start + parseInt(t.duration,10) : start + 60);
-                        if (end <= start) end = start + 60;
+                        if (end <= start) end += 1440; // crosses midnight → span to true length
                         const top = (start/60)*HOUR_PX;
-                        const height = Math.max(24, ((end-start)/60)*HOUR_PX);
+                        const height = Math.max(24, ((Math.min(end,1440)-start)/60)*HOUR_PX);
                         return (
                           <div key={t.id} className="bg-event"
                             style={{ top: top+'px', height: height+'px', background: roleColor(t.role)+'14', borderColor: roleColor(t.role)+'55', borderLeft: `4px solid ${roleColor(t.role)}` }}
@@ -3706,7 +3731,7 @@ function App() {
                         const bgRanges = bgEvents.map(b => {
                           const bs = toMinutes(b.time);
                           let be = b.endTime ? toMinutes(b.endTime) : (b.duration ? bs+parseInt(b.duration,10) : bs+60);
-                          if (be <= bs) be = bs+60;
+                          if (be <= bs) be += 1440; // crosses midnight
                           return [bs, be];
                         });
                         const BG_INSET = 12; // px the fg shifts right to reveal the bg stripe
@@ -3714,7 +3739,13 @@ function App() {
                           const lay = layout[t.id];
                           if (!lay) return null;
                           const top = (lay.start / 60) * HOUR_PX;
-                          const height = Math.max(18, ((lay.end - lay.start) / 60) * HOUR_PX - 2);
+                          // A session crossing midnight has lay.end > 1440. Until true cross-day
+                          // rendering exists (see roadmap: multi-day sessions), clamp the drawn
+                          // block to end-of-day so it can't stretch the Score's layout, and flag
+                          // it so we can show a "continues" cap instead of silently truncating.
+                          const crossesMidnight = lay.end > 1440;
+                          const drawnEnd = Math.min(lay.end, 1440);
+                          const height = Math.max(18, ((drawnEnd - lay.start) / 60) * HOUR_PX - 2);
                           const cols = lay.cols || 1;
                           const widthPct = 100 / cols;
                           const leftPct = lay.col * widthPct;
@@ -3753,6 +3784,7 @@ function App() {
                               <div className="event-title">{t.priority==='high'?<span className="ev-pr">▲ </span>:''}{t.repeat && t.repeat.freq!=='none' ? '🔁 ' : ''}{t.done?'✓ ':''}{t.title}</div>
                             {(() => { const ids = t.themeIds || (t.themeId ? [t.themeId] : []); return ids.length > 0 ? <div className="event-themes">{ids.map(id => { const th = getThemes().find(x=>x.id===id); return th ? <span key={id} className="event-theme-dot" style={{background: roleColor(th.role)}} title={th.title}></span> : null; })}</div> : null; })()}
                             {(t.endTime || t.duration) && <div className="event-time">{fmtTime(t.time, use24h)}{t.endTime?`–${fmtTime(t.endTime, use24h)}`:''}</div>}
+                            {crossesMidnight && <div className="event-continues" title={`Continues to ${fmtTime(t.endTime, use24h)} next day`}>↓ continues past midnight</div>}
                           </div>
                         );
                         });
@@ -4047,7 +4079,8 @@ function App() {
                 // Background + All-day are SESSION properties (a theme has no time, so they're
                 // meaningless for it). Hide both when the form is a theme — new draft or existing.
                 const o = editingId ? tasks.find(t => t.id === editingId) : null;
-                const editingTheme = o && (o.kind === 'weekly' || o.kind === 'project' || o.kind === 'standing');
+                // A background/all-day item is a session, not a theme — keep the checkboxes.
+                const editingTheme = o && !o.isBackground && !o.allDay && !o.time && (o.kind === 'weekly' || o.kind === 'project' || o.kind === 'standing');
                 const draftTheme = formData.draftKind === 'theme';
                 if (editingTheme || draftTheme) return null;
                 return (
@@ -4072,7 +4105,8 @@ function App() {
                   TWO sets of dates. Hide them when editing a theme. */}
               {(() => {
                 const o = editingId ? tasks.find(t => t.id === editingId) : null;
-                const editingTheme = o && (o.kind === 'weekly' || o.kind === 'project' || o.kind === 'standing');
+                // A background/all-day item is a session, not a theme — keep the checkboxes.
+                const editingTheme = o && !o.isBackground && !o.allDay && !o.time && (o.kind === 'weekly' || o.kind === 'project' || o.kind === 'standing');
                 const draftTheme = formData.draftKind === 'theme';
                 if (editingTheme || draftTheme) return null;
                 return (
@@ -5525,7 +5559,7 @@ function TimeEntry({ value, use24h, onChange, startTime }) {
       <input type="number" className="te-hour" placeholder="--" min={use24h?0:1} max={use24h?23:12}
         value={parts.hour} onFocus={e => e.target.select()} onChange={e => update('hour', e.target.value)} />
       <span className="te-colon">:</span>
-      <input type="number" className="te-min" placeholder="00" min={0} max={59} step={5}
+      <input type="number" className="te-min" placeholder="00" min={0} max={59} step={1}
         value={parts.minute} onFocus={e => e.target.select()} onChange={e => update('minute', e.target.value)} />
       {!use24h && (
         <select className="te-ampm" value={parts.ampm} onChange={e => update('ampm', e.target.value)}>

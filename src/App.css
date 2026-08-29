@@ -1719,3 +1719,7 @@ textarea { resize: vertical; }
 .session-cue-sheet { margin-top: 14px; }
 .session-cue-sheet .cue-check { margin: 0 2px 0 0; flex-shrink: 0; }
 .session-cue-sheet .theme-session-title.cue-done { text-decoration: line-through; opacity: 0.5; }
+
+/* "Continues past midnight" cap on a session that crosses the dateline (stopgap until true
+   cross-day rendering — see roadmap: multi-day sessions) */
+.event-continues { font-size: 10px; opacity: 0.7; font-style: italic; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
