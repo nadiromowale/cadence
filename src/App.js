@@ -641,6 +641,94 @@ function App() {
     return data;
   }
 
+  // Export sessions as an .ics calendar file. Recurring sessions are EXPANDED into discrete
+  // occurrences over a horizon using the same occursOn logic the app renders with, so the file
+  // matches exactly what Cadence shows (respecting skipDates), rather than risking RRULE
+  // translation bugs. Full detail (title, time, notes, location) — this is for Nadir's own
+  // calendars, which he doesn't share.
+  function exportICS() {
+    const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    const pad = n => String(n).padStart(2, '0');
+    const esc = s => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+    const dtStamp = (() => { const d = new Date(); return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`; })();
+    // local datetime → ics local format YYYYMMDDTHHMMSS (floating local time, no Z)
+    const localDT = (dateStr, hhmm) => {
+      const [y,m,d] = dateStr.split('-');
+      const [hh,mm] = (hhmm || '00:00').split(':');
+      return `${y}${m}${d}T${pad(hh)}${pad(mm)}00`;
+    };
+    const addMinutesToDate = (dateStr, minutes) => {
+      const base = parseLocalDate(dateStr); base.setMinutes(base.getMinutes() + minutes);
+      return { date: fmtInput(base), hh: pad(base.getHours()), mm: pad(base.getMinutes()) };
+    };
+
+    const horizonStart = fmtInput(addDays(fmtInput(new Date()), -30)); // include recent past month
+    const horizonEnd = fmtInput(addDays(fmtInput(new Date()), 183));   // ~6 months forward
+    const sessions = tasks.filter(t => !isTheme(t) && !t.done);
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Cadence Studio//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+
+    const emitEvent = (s, dateStr, idx) => {
+      const uid = `${s.id}-${dateStr}-${idx}@cadence`;
+      lines.push('BEGIN:VEVENT');
+      lines.push(`UID:${uid}`);
+      lines.push(`DTSTAMP:${dtStamp}`);
+      const roleName = (roles.find(r => r.id === s.role) || {}).label || '';
+      const themeNames = (s.themeIds || []).map(id => (tasks.find(t => t.id === id) || {}).title).filter(Boolean);
+      if (s.allDay || !s.time) {
+        // all-day: DTSTART;VALUE=DATE, DTEND exclusive next day (or endDate+1)
+        const start = dateStr.replace(/-/g,'');
+        const endBase = s.endDate && s.endDate > dateStr ? s.endDate : dateStr;
+        const endExcl = fmtInput(addDays(endBase, 1)).replace(/-/g,'');
+        lines.push(`DTSTART;VALUE=DATE:${start}`);
+        lines.push(`DTEND;VALUE=DATE:${endExcl}`);
+      } else {
+        lines.push(`DTSTART:${localDT(dateStr, s.time)}`);
+        // end time; if end<=start it crosses midnight → end on next day
+        let endDate = dateStr, endHHMM = s.endTime;
+        if (s.endTime) {
+          if (toMinutes(s.endTime) <= toMinutes(s.time)) endDate = fmtInput(addDays(dateStr, 1));
+          endHHMM = s.endTime;
+        } else if (s.duration) {
+          const e = addMinutesToDate(`${dateStr}T`.slice(0,10), 0);
+          const base = parseLocalDate(dateStr); base.setHours(parseInt(s.time.split(':')[0],10), parseInt(s.time.split(':')[1],10)); base.setMinutes(base.getMinutes()+parseInt(s.duration,10));
+          endDate = fmtInput(base); endHHMM = `${pad(base.getHours())}:${pad(base.getMinutes())}`;
+        } else {
+          const base = parseLocalDate(dateStr); base.setHours(parseInt(s.time.split(':')[0],10)+1, parseInt(s.time.split(':')[1],10));
+          endDate = fmtInput(base); endHHMM = `${pad(base.getHours())}:${pad(base.getMinutes())}`;
+        }
+        lines.push(`DTEND:${localDT(endDate, endHHMM)}`);
+      }
+      lines.push(`SUMMARY:${esc(s.title)}`);
+      const descParts = [];
+      if (roleName) descParts.push(`Role: ${roleName}`);
+      if (themeNames.length) descParts.push(`Theme: ${themeNames.join(', ')}`);
+      if (s.notes) descParts.push(s.notes);
+      if (descParts.length) lines.push(`DESCRIPTION:${esc(descParts.join('\n'))}`);
+      if (s.location) lines.push(`LOCATION:${esc(s.location)}`);
+      lines.push('END:VEVENT');
+    };
+
+    sessions.forEach(s => {
+      const recurring = s.repeat && s.repeat.freq && s.repeat.freq !== 'none';
+      if (!recurring) {
+        if ((s.startDate || '') >= horizonStart && (s.startDate || '') <= horizonEnd) emitEvent(s, s.startDate, 0);
+        return;
+      }
+      let idx = 0;
+      for (let dt = horizonStart; dt <= horizonEnd; dt = fmtInput(addDays(dt, 1))) {
+        if (occursOn(s, dt)) { emitEvent(s, dt, idx); idx++; }
+      }
+    });
+
+    lines.push('END:VCALENDAR');
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `cadence-calendar-${fmtInput(new Date())}.ics`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function exportData() {
     const payload = {
       app: 'Cadence Studio',
@@ -4663,6 +4751,16 @@ function App() {
                       {lastExport && <span className="backup-last"> Last export: {new Date(lastExport).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}.</span>}
                     </div>
                     <button className="btn-primary" style={{width:'auto'}} onClick={exportData}>⤓ Export Cadence</button>
+                  </div>
+
+                  <div className="backup-block">
+                    <div className="backup-block-head">Calendar file (.ics)</div>
+                    <div className="backup-block-body">
+                      Download your sessions as a calendar file to import into Google Calendar,
+                      Apple Calendar, or Outlook. Recurring sessions are expanded for the next
+                      six months. Full detail, for your own calendars.
+                    </div>
+                    <button className="btn-secondary" style={{width:'auto'}} onClick={exportICS}>⤓ Export .ics calendar</button>
                   </div>
 
                   <div className="backup-block">
