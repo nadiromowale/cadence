@@ -419,9 +419,13 @@ function App() {
   const [viewingThemeId, setViewingThemeId] = useState(null);
   const [cueDraft, setCueDraft] = useState('');
   const [sessionCueDraft, setSessionCueDraft] = useState('');
+  const [draggedCueId, setDraggedCueId] = useState(null);
+  const [dragOverCueId, setDragOverCueId] = useState(null);
   // Cues added in the + Theme creation form, before the theme exists (no id yet). They're
   // held here and committed as real cues, tied to the new theme, on save.
   const [pendingCues, setPendingCues] = useState([]);
+  const [draggedPendingIdx, setDraggedPendingIdx] = useState(null);
+  const [dragOverPendingIdx, setDragOverPendingIdx] = useState(null);
   const [pendingCueDraft, setPendingCueDraft] = useState('');
   // When set, we're choosing which session to add this cue to (shows the session picker).
   const [assigningCue, setAssigningCue] = useState(null);
@@ -647,53 +651,48 @@ function App() {
   // translation bugs. Full detail (title, time, notes, location) — this is for Nadir's own
   // calendars, which he doesn't share.
   function exportICS() {
+   try {
     const isTheme = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
     const pad = n => String(n).padStart(2, '0');
     const esc = s => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
     const dtStamp = (() => { const d = new Date(); return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`; })();
-    // local datetime → ics local format YYYYMMDDTHHMMSS (floating local time, no Z)
+    const validDate = ds => typeof ds === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ds);
     const localDT = (dateStr, hhmm) => {
       const [y,m,d] = dateStr.split('-');
       const [hh,mm] = (hhmm || '00:00').split(':');
       return `${y}${m}${d}T${pad(hh)}${pad(mm)}00`;
     };
-    const addMinutesToDate = (dateStr, minutes) => {
-      const base = parseLocalDate(dateStr); base.setMinutes(base.getMinutes() + minutes);
-      return { date: fmtInput(base), hh: pad(base.getHours()), mm: pad(base.getMinutes()) };
-    };
 
-    const horizonStart = fmtInput(addDays(fmtInput(new Date()), -30)); // include recent past month
-    const horizonEnd = fmtInput(addDays(fmtInput(new Date()), 183));   // ~6 months forward
+    const todayStr = fmtInput(new Date());
+    const horizonStart = addDays(todayStr, -30); // addDays already returns a YYYY-MM-DD string
+    const horizonEnd = addDays(todayStr, 183);
     const sessions = tasks.filter(t => !isTheme(t) && !t.done);
     const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Cadence Studio//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
 
     const emitEvent = (s, dateStr, idx) => {
-      const uid = `${s.id}-${dateStr}-${idx}@cadence`;
+      if (!validDate(dateStr)) return; // skip anything without a real date
       lines.push('BEGIN:VEVENT');
-      lines.push(`UID:${uid}`);
+      lines.push(`UID:${s.id}-${dateStr}-${idx}@cadence`);
       lines.push(`DTSTAMP:${dtStamp}`);
       const roleName = (roles.find(r => r.id === s.role) || {}).label || '';
       const themeNames = (s.themeIds || []).map(id => (tasks.find(t => t.id === id) || {}).title).filter(Boolean);
-      if (s.allDay || !s.time) {
-        // all-day: DTSTART;VALUE=DATE, DTEND exclusive next day (or endDate+1)
+      const hasClock = s.time && /^\d{1,2}:\d{2}$/.test(s.time);
+      if (s.allDay || !hasClock) {
         const start = dateStr.replace(/-/g,'');
-        const endBase = s.endDate && s.endDate > dateStr ? s.endDate : dateStr;
-        const endExcl = fmtInput(addDays(endBase, 1)).replace(/-/g,'');
+        const endBase = validDate(s.endDate) && s.endDate > dateStr ? s.endDate : dateStr;
+        const endExcl = addDays(endBase, 1).replace(/-/g,'');
         lines.push(`DTSTART;VALUE=DATE:${start}`);
         lines.push(`DTEND;VALUE=DATE:${endExcl}`);
       } else {
         lines.push(`DTSTART:${localDT(dateStr, s.time)}`);
-        // end time; if end<=start it crosses midnight → end on next day
-        let endDate = dateStr, endHHMM = s.endTime;
-        if (s.endTime) {
-          if (toMinutes(s.endTime) <= toMinutes(s.time)) endDate = fmtInput(addDays(dateStr, 1));
+        let endDate = dateStr, endHHMM;
+        if (s.endTime && /^\d{1,2}:\d{2}$/.test(s.endTime)) {
+          if (toMinutes(s.endTime) <= toMinutes(s.time)) endDate = addDays(dateStr, 1);
           endHHMM = s.endTime;
-        } else if (s.duration) {
-          const e = addMinutesToDate(`${dateStr}T`.slice(0,10), 0);
-          const base = parseLocalDate(dateStr); base.setHours(parseInt(s.time.split(':')[0],10), parseInt(s.time.split(':')[1],10)); base.setMinutes(base.getMinutes()+parseInt(s.duration,10));
-          endDate = fmtInput(base); endHHMM = `${pad(base.getHours())}:${pad(base.getMinutes())}`;
         } else {
-          const base = parseLocalDate(dateStr); base.setHours(parseInt(s.time.split(':')[0],10)+1, parseInt(s.time.split(':')[1],10));
+          const durMin = s.duration ? parseInt(s.duration, 10) : 60;
+          const base = parseLocalDate(dateStr);
+          base.setHours(parseInt(s.time.split(':')[0],10), parseInt(s.time.split(':')[1],10) + durMin);
           endDate = fmtInput(base); endHHMM = `${pad(base.getHours())}:${pad(base.getMinutes())}`;
         }
         lines.push(`DTEND:${localDT(endDate, endHHMM)}`);
@@ -711,11 +710,12 @@ function App() {
     sessions.forEach(s => {
       const recurring = s.repeat && s.repeat.freq && s.repeat.freq !== 'none';
       if (!recurring) {
-        if ((s.startDate || '') >= horizonStart && (s.startDate || '') <= horizonEnd) emitEvent(s, s.startDate, 0);
+        if (validDate(s.startDate) && s.startDate >= horizonStart && s.startDate <= horizonEnd) emitEvent(s, s.startDate, 0);
         return;
       }
+      if (!validDate(s.startDate)) return;
       let idx = 0;
-      for (let dt = horizonStart; dt <= horizonEnd; dt = fmtInput(addDays(dt, 1))) {
+      for (let dt = horizonStart; dt <= horizonEnd; dt = addDays(dt, 1)) {
         if (occursOn(s, dt)) { emitEvent(s, dt, idx); idx++; }
       }
     });
@@ -727,6 +727,10 @@ function App() {
     a.href = url; a.download = `cadence-calendar-${fmtInput(new Date())}.ics`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
+   } catch (err) {
+    console.error('ICS export failed:', err);
+    alert('Sorry, the calendar export hit a problem and could not finish. Nothing was changed. (Details are in the console.)');
+   }
   }
 
   function exportData() {
@@ -1311,9 +1315,50 @@ function App() {
   // Add a "cue" to a theme's Cue Sheet: an untimed task tied to the theme, inheriting the
   // theme's role. It has no time, so it's planned work waiting to be scheduled into a block.
   // (It is NOT Unfinished Business, that's for committed work that slipped.)
+  // Reorder cues within a theme's Cue Sheet by drag-and-drop. Rebuilds sequential cueOrder
+  // values for the theme's unscheduled cues so the new visual order persists.
+  // Reorder cues inside a SESSION by drag-and-drop (same mechanism as theme cue reorder).
+  function reorderSessionCue(sessionId, draggedId, targetId) {
+    if (draggedId == null || targetId == null || draggedId === targetId) return;
+    const ordered = childNodes(sessionId);
+    const from = ordered.findIndex(c => c.id === draggedId);
+    const to = ordered.findIndex(c => c.id === targetId);
+    if (from === -1 || to === -1) return;
+    const [moved] = ordered.splice(from, 1);
+    ordered.splice(to, 0, moved);
+    const orderById = {};
+    ordered.forEach((c, i) => { orderById[c.id] = i; });
+    setTasks(prev => prev.map(t => (t.id in orderById) ? { ...t, cueOrder: orderById[t.id] } : t));
+  }
+
+  function reorderCue(themeId, draggedId, targetId) {
+    if (draggedId == null || targetId == null || draggedId === targetId) return;
+    const ordered = unscheduledForTheme(themeId).slice().sort(cueSort);
+    const from = ordered.findIndex(c => c.id === draggedId);
+    const to = ordered.findIndex(c => c.id === targetId);
+    if (from === -1 || to === -1) return;
+    const [moved] = ordered.splice(from, 1);
+    ordered.splice(to, 0, moved);
+    const orderById = {};
+    ordered.forEach((c, i) => { orderById[c.id] = i; });
+    setTasks(prev => prev.map(t => (t.id in orderById) ? { ...t, cueOrder: orderById[t.id] } : t));
+  }
+
+  // Sort cues by explicit cueOrder when present, falling back to id for any not yet ordered
+  // (older cues created before drag-reorder existed). Stable and deterministic.
+  function cueSort(a, b) {
+    const ao = a.cueOrder, bo = b.cueOrder;
+    if (ao != null && bo != null) return ao - bo;
+    if (ao != null) return -1;
+    if (bo != null) return 1;
+    return String(a.id).localeCompare(String(b.id));
+  }
+
   function addCueToTheme(themeId, title) {
     const theme = tasks.find(t => t.id === themeId);
     if (!theme) return;
+    const existing = unscheduledForTheme(themeId);
+    const maxOrder = existing.reduce((m, c) => (c.cueOrder != null && c.cueOrder > m ? c.cueOrder : m), -1);
     const cue = {
       id: Date.now() + Math.floor(Math.random()*1000),
       title, role: theme.role, priority: 'medium',
@@ -1322,6 +1367,7 @@ function App() {
       themeIds: [themeId], parentId: null,
       notes: '', links: [], tags: [], done: false,
       isCue: true, // marks it as originating from a theme Cue Sheet (planned, not slipped)
+      cueOrder: maxOrder + 1,
     };
     setTasks(prev => [...prev, cue]);
   }
@@ -1368,7 +1414,15 @@ function App() {
             onClick={() => { if (sessionCueDraft.trim()) { addCueDirectlyToSession(session.id, sessionCueDraft.trim()); setSessionCueDraft(''); } }}>Add</button>
         </div>
         {cues.map(c => (
-          <div key={c.id} className="theme-session-row unsched-row">
+          <div key={c.id}
+            className={`theme-session-row unsched-row${draggedCueId===c.id ? ' cue-dragging' : ''}${dragOverCueId===c.id ? ' cue-drag-over' : ''}`}
+            draggable
+            onDragStart={(e)=>{ e.stopPropagation(); setDraggedCueId(c.id); e.dataTransfer.effectAllowed='move'; }}
+            onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; if (dragOverCueId!==c.id) setDragOverCueId(c.id); }}
+            onDragLeave={()=>{ if (dragOverCueId===c.id) setDragOverCueId(null); }}
+            onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); reorderSessionCue(session.id, draggedCueId, c.id); setDraggedCueId(null); setDragOverCueId(null); }}
+            onDragEnd={()=>{ setDraggedCueId(null); setDragOverCueId(null); }}>
+            <span className="cue-drag-handle" title="Drag to reorder">⠿</span>
             <input type="checkbox" className="cue-check" checked={!!c.done}
               onChange={() => setTasks(prev => prev.map(x => x.id === c.id ? {...x, done: !x.done} : x))} />
             <div className="theme-session-main">
@@ -1639,6 +1693,7 @@ function App() {
     // withTime === true → a Session draft. false → a Theme draft. Both open with a
     // blank date field — the only real difference is a theme contains other sessions.
     const isSession = withTime !== false;
+    setPendingCues([]); setPendingCueDraft('');
     setFormData({ ...blankForm(selectedRole === 'all' ? roles[0].id : selectedRole),
       startDate: '', endDate: '', time: '', endTime: '', duration: '',
       draftKind: isSession ? 'session' : 'theme',
@@ -1649,6 +1704,7 @@ function App() {
 
   function openModalAt(dateStr, hour, minutes) {
     setEditingId(null);
+    setPendingCues([]); setPendingCueDraft('');
     let time = '';
     if (minutes !== null && minutes !== undefined) {
       const h = Math.floor(minutes / 60), m = minutes % 60;
@@ -1661,6 +1717,7 @@ function App() {
   }
 
   const dragGrabOffsetY = useRef(0);
+  const dragGrabOffsetX = useRef(0);
 
   function handleDragStart(e, task, occDate) {
     e.stopPropagation();
@@ -1673,7 +1730,8 @@ function App() {
     try {
       const r = e.currentTarget.getBoundingClientRect();
       dragGrabOffsetY.current = e.clientY - r.top;
-    } catch { dragGrabOffsetY.current = 0; }
+      dragGrabOffsetX.current = e.clientX - r.left;
+    } catch { dragGrabOffsetY.current = 0; dragGrabOffsetX.current = 0; }
   }
 
   function addDays(dateStr, n) {
@@ -1767,6 +1825,7 @@ function App() {
   function openEdit(task, occurrenceDate) {
     setEditingId(task.id);
     setEditingOccurrenceDate(occurrenceDate || null);
+    setPendingCues([]); setPendingCueDraft('');
     const rep = task.repeat || {};
     // A timed item is always a session; a theme carries a real kind and no time. This
     // drives which controls show. Without it a plain session defaulted to kind:'weekly'
@@ -1990,18 +2049,29 @@ function App() {
       fired.delete(editingId);
       localStorage.setItem('planner-fired-reminders', JSON.stringify([...fired]));
     } else {
-      // New task. If it's a new THEME with pending cues from the creation form, create those
-      // cues too, tied to the new theme's id (they had nowhere to attach until now).
+      // New task. If it's a new THEME with pending cues, create those cues tied to the theme.
+      // If it's a new SESSION with pending cues, create them as CHILDREN of the session (a
+      // session's cues nest inside it), preserving the drag order via cueOrder.
       const isNewTheme = (data.kind === 'weekly' || data.kind === 'project' || data.kind === 'standing') && !data.time && !data.allDay;
-      const cueTasks = (isNewTheme && pendingCues.length > 0)
-        ? pendingCues.map((title, i) => ({
-            id: data.id + 1 + i,
-            title, role: data.role, priority: 'medium',
-            time: '', endTime: '', allDay: false, startDate: '', endDate: '',
-            themeIds: [data.id], parentId: null,
-            notes: '', links: [], tags: [], done: false, isCue: true,
-          }))
-        : [];
+      const isNewSession = !isNewTheme;
+      let cueTasks = [];
+      if (isNewTheme && pendingCues.length > 0) {
+        cueTasks = pendingCues.map((title, i) => ({
+          id: data.id + 1 + i,
+          title, role: data.role, priority: 'medium',
+          time: '', endTime: '', allDay: false, startDate: '', endDate: '',
+          themeIds: [data.id], parentId: null,
+          notes: '', links: [], tags: [], done: false, isCue: true, cueOrder: i,
+        }));
+      } else if (isNewSession && pendingCues.length > 0) {
+        cueTasks = pendingCues.map((title, i) => ({
+          id: data.id + 1 + i,
+          title, role: data.role, priority: 'medium',
+          time: '', endTime: '', allDay: false, startDate: '', endDate: '',
+          themeIds: data.themeIds ? [...data.themeIds] : [], parentId: data.id,
+          notes: '', links: [], tags: [], done: false, isCue: true, cueOrder: i,
+        }));
+      }
       setTasks([...tasks, data, ...cueTasks]);
       setPendingCues([]);
       setPendingCueDraft('');
@@ -2443,7 +2513,14 @@ function App() {
 
   // ---- Node model helpers ----
   function childNodes(parentId) {
-    return tasks.filter(t => t.parentId === parentId && !t.time && !t.allDay).slice().sort(byPriority);
+    return tasks.filter(t => t.parentId === parentId && !t.time && !t.allDay).slice()
+      .sort((a, b) => {
+        const ao = a.cueOrder, bo = b.cueOrder;
+        if (ao != null && bo != null) return ao - bo;
+        if (ao != null) return -1;
+        if (bo != null) return 1;
+        return byPriority(a, b);
+      });
   }
   // All scheduled sessions belonging to a node (its own sessions live as timed tasks with parentId === node.id)
   function nodeSessions(nodeId) {
@@ -3016,7 +3093,7 @@ function App() {
                       const moving = tasks.find(t => Number(t.id) === id);
                       if (!moving) return;
                       const rect = e.currentTarget.getBoundingClientRect();
-                      const x = e.clientX - rect.left;
+                      const x = (e.clientX - dragGrabOffsetX.current) - rect.left;
                       let mins = Math.round((x / HOUR_W) * 60);
                       mins = Math.round(mins / gridSnap) * gridSnap;
                       mins = Math.max(0, Math.min(23*60+30, mins));
@@ -3858,9 +3935,9 @@ function App() {
                                 e.preventDefault(); e.stopPropagation();
                                 const col = e.currentTarget.parentElement;
                                 const rect = col.getBoundingClientRect();
-                                const y = e.clientY - rect.top;
+                                const y = (e.clientY - dragGrabOffsetY.current) - rect.top;
                                 const rawMin = (y / HOUR_PX) * 60;
-                                const snapped = Math.max(0, Math.min(23*60+59, Math.floor(rawMin / gridSnap) * gridSnap));
+                                const snapped = Math.max(0, Math.min(23*60+59, Math.round(rawMin / gridSnap) * gridSnap));
                                 handleDrop(e, dateStr, Math.floor(snapped/60), snapped);
                               }}
                               onMouseDown={() => setHoverTip(null)}
@@ -4149,7 +4226,23 @@ function App() {
                     {pendingCues.length > 0 && (
                       <div className="pending-cues">
                         {pendingCues.map((c, i) => (
-                          <div key={i} className="theme-session-row unsched-row pending-cue-row">
+                          <div key={i}
+                            className={`theme-session-row unsched-row pending-cue-row${draggedPendingIdx===i ? ' cue-dragging' : ''}${dragOverPendingIdx===i ? ' cue-drag-over' : ''}`}
+                            draggable
+                            onDragStart={(e)=>{ e.stopPropagation(); setDraggedPendingIdx(i); e.dataTransfer.effectAllowed='move'; }}
+                            onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; if (dragOverPendingIdx!==i) setDragOverPendingIdx(i); }}
+                            onDragLeave={()=>{ if (dragOverPendingIdx===i) setDragOverPendingIdx(null); }}
+                            onDrop={(e)=>{ e.preventDefault(); e.stopPropagation();
+                              if (draggedPendingIdx!=null && draggedPendingIdx!==i) {
+                                const next = pendingCues.slice();
+                                const [moved] = next.splice(draggedPendingIdx, 1);
+                                next.splice(i, 0, moved);
+                                setPendingCues(next);
+                              }
+                              setDraggedPendingIdx(null); setDragOverPendingIdx(null);
+                            }}
+                            onDragEnd={()=>{ setDraggedPendingIdx(null); setDragOverPendingIdx(null); }}>
+                            <span className="cue-drag-handle" title="Drag to reorder">⠿</span>
                             <span className="unsched-dot" style={{background: roleColor(formData.role)}} title={roleLabel(formData.role)}></span>
                             <div className="theme-session-main">
                               <div className="theme-session-title">{c}</div>
@@ -4280,15 +4373,60 @@ function App() {
               </div>
 
               {(() => {
-                // Cue Sheet — the work to be done during this session. Sits right under Location
-                // (it's the substance of the block). Existing sessions only, not themes. Shared
-                // renderer so it matches the info view and theme Cue Sheet exactly.
-                if (!editingId) return null;
-                const editing = tasks.find(x => x.id === editingId);
-                if (!editing) return null;
-                const isTheme = editing.kind === 'weekly' || editing.kind === 'project' || editing.kind === 'standing';
-                if (isTheme) return null;
-                return renderSessionCueSheet(editing);
+                // Cue Sheet — the work to be done during this session. Sits right under Location.
+                // Existing session → the shared renderer (real cues). New session (no editingId,
+                // draftKind 'session') → a pending Cue Sheet held in pendingCues and committed as
+                // the session's children on save, reorderable before saving. Never for themes.
+                if (formData.draftKind === 'theme') return null;
+                if (editingId) {
+                  const editing = tasks.find(x => x.id === editingId);
+                  if (!editing) return null;
+                  const isTheme = editing.kind === 'weekly' || editing.kind === 'project' || editing.kind === 'standing';
+                  if (isTheme) return null;
+                  return renderSessionCueSheet(editing);
+                }
+                // New session: pending Cue Sheet (same pendingCues array + drag as +Theme)
+                return (
+                  <div className="theme-roster session-cue-sheet">
+                    <div className="cue-sheet-header">
+                      <div className="cue-sheet-title">Cue Sheet{pendingCues.length > 0 ? <span className="roster-count" style={{marginLeft:6}}>{pendingCues.length}</span> : null}</div>
+                      <div className="cue-sheet-desc">work to do during this block</div>
+                    </div>
+                    <div className="cue-add-row">
+                      <input type="text" className="cue-add-input" placeholder="Add a cue…"
+                        value={pendingCueDraft} onChange={e => setPendingCueDraft(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (pendingCueDraft.trim()) { setPendingCues([...pendingCues, pendingCueDraft.trim()]); setPendingCueDraft(''); } } }} />
+                      <button type="button" className="cue-add-btn" disabled={!pendingCueDraft.trim()}
+                        onClick={() => { if (pendingCueDraft.trim()) { setPendingCues([...pendingCues, pendingCueDraft.trim()]); setPendingCueDraft(''); } }}>Add</button>
+                    </div>
+                    {pendingCues.map((c, i) => (
+                      <div key={i}
+                        className={`theme-session-row unsched-row pending-cue-row${draggedPendingIdx===i ? ' cue-dragging' : ''}${dragOverPendingIdx===i ? ' cue-drag-over' : ''}`}
+                        draggable
+                        onDragStart={(e)=>{ e.stopPropagation(); setDraggedPendingIdx(i); e.dataTransfer.effectAllowed='move'; }}
+                        onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; if (dragOverPendingIdx!==i) setDragOverPendingIdx(i); }}
+                        onDragLeave={()=>{ if (dragOverPendingIdx===i) setDragOverPendingIdx(null); }}
+                        onDrop={(e)=>{ e.preventDefault(); e.stopPropagation();
+                          if (draggedPendingIdx!=null && draggedPendingIdx!==i) {
+                            const next = pendingCues.slice();
+                            const [moved] = next.splice(draggedPendingIdx, 1);
+                            next.splice(i, 0, moved);
+                            setPendingCues(next);
+                          }
+                          setDraggedPendingIdx(null); setDragOverPendingIdx(null);
+                        }}
+                        onDragEnd={()=>{ setDraggedPendingIdx(null); setDragOverPendingIdx(null); }}>
+                        <span className="cue-drag-handle" title="Drag to reorder">⠿</span>
+                        <span className="unsched-dot" style={{background: roleColor(formData.role)}} title={roleLabel(formData.role)}></span>
+                        <div className="theme-session-main">
+                          <div className="theme-session-title">{c}</div>
+                          <div className="theme-session-when unsched-when">Cue · saved with session</div>
+                        </div>
+                        <button type="button" className="pending-cue-remove" onClick={() => setPendingCues(pendingCues.filter((_, j) => j !== i))}>×</button>
+                      </div>
+                    ))}
+                  </div>
+                );
               })()}
 
               <div className="form-group"><label>Notes <span className="field-hint-inline">**bold** *italic* &nbsp;- bullet&nbsp; 1. numbered</span></label><textarea className="notes-field" value={formData.notes} onChange={e => setFormData({...formData,notes:e.target.value})} rows="7" placeholder="Longer notes go here — drag the bottom corner to make this bigger."/></div>
@@ -4760,7 +4898,7 @@ function App() {
                       Apple Calendar, or Outlook. Recurring sessions are expanded for the next
                       six months. Full detail, for your own calendars.
                     </div>
-                    <button className="btn-secondary" style={{width:'auto'}} onClick={exportICS}>⤓ Export .ics calendar</button>
+                    <button className="btn-primary" style={{width:'auto'}} onClick={exportICS}>⤓ Export .ics calendar</button>
                   </div>
 
                   <div className="backup-block">
@@ -5176,12 +5314,20 @@ function App() {
                 {sessions.length === 0 && unscheduledForTheme(viewingThemeId).length === 0 && <div className="theme-empty">No sessions yet. Add a cue above, or schedule one directly.</div>}
 
                 {(() => {
-                  const unsched = unscheduledForTheme(viewingThemeId);
+                  const unsched = unscheduledForTheme(viewingThemeId).slice().sort(cueSort);
                   if (unsched.length === 0) return null;
                   return (
                     <>
                       {unsched.map(s => (
-                        <div key={s.id} className="theme-session-row unsched-row">
+                        <div key={s.id}
+                          className={`theme-session-row unsched-row${draggedCueId===s.id ? ' cue-dragging' : ''}${dragOverCueId===s.id ? ' cue-drag-over' : ''}`}
+                          draggable
+                          onDragStart={(e)=>{ e.stopPropagation(); setDraggedCueId(s.id); e.dataTransfer.effectAllowed='move'; }}
+                          onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; if (dragOverCueId!==s.id) setDragOverCueId(s.id); }}
+                          onDragLeave={()=>{ if (dragOverCueId===s.id) setDragOverCueId(null); }}
+                          onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); reorderCue(viewingThemeId, draggedCueId, s.id); setDraggedCueId(null); setDragOverCueId(null); }}
+                          onDragEnd={()=>{ setDraggedCueId(null); setDragOverCueId(null); }}>
+                          <span className="cue-drag-handle" title="Drag to reorder">⠿</span>
                           <span className="unsched-dot" style={{background: roleColor(s.role)}} title={roleLabel(s.role)}></span>
                           <div className="theme-session-main">
                             <div className="theme-session-title cue-title-link" onClick={(e)=>{ e.stopPropagation(); bookTimeForCue(s, viewingThemeId); }}>{s.title}</div>
