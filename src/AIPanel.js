@@ -152,7 +152,14 @@ function normalizeTask(t) {
     endDate,
     time,
     endTime,
-    notes: t.notes || t.note || t.description || ''
+    notes: t.notes || t.note || t.description || '',
+    // Extended fields so AI planning can build the full model, not just sessions:
+    // itemType: 'session' (default) | 'theme' | 'cue'
+    // theme: a THEME NAME to attach a cue/session to (resolved to an id on commit)
+    // themeKind: for itemType 'theme' — 'project' | 'standing' | 'weekly'
+    itemType: (t.itemType || t.type || '').toLowerCase() || (t.isCue ? 'cue' : ''),
+    theme: t.theme || t.themeName || t.theme_name || '',
+    themeKind: (t.themeKind || t.theme_kind || t.kind || '').toLowerCase(),
   };
 }
 
@@ -211,9 +218,20 @@ ${weekContext}
 
 If the user pastes a schedule, convert every item into a task object. The schedule may be a plain-text table with day headers (e.g. "Monday, June 29") followed by rows like "10:00–11:30  Task name". For each row: use the most recent day header as the date, parse the start of the time range as "time" and the end as "endTime". Assume business-hours interpretation — times like 10:00, 11:30 are AM; 1:00, 2:00, 3:30, 4:45 are PM (afternoon) unless context says otherwise. Convert all times to 24-hour "HH:MM". Put a one-line summary before the block. Always include the JSON block when tasks are involved. Keep replies concise.
 
-Each task object uses these fields:
-{ "title": string, "role": one of the role ids above, "priority": "low"|"medium"|"high", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" (optional), "time": "HH:MM" 24h start, "endTime": "HH:MM" 24h end (optional), "notes": string (optional) }
-Keep the "title" short and scannable (a few words). Put any agenda, attendee list, sub-items, links, or extra detail in "notes", NEVER in the title. For example, a meeting whose agenda covers several topics should have a short title like "Mark/Nadir Touchpoint" and the agenda in notes.`;
+Each object uses these fields:
+{ "itemType": "session" | "theme" | "cue" (default "session"), "title": string, "role": one of the role ids above, "priority": "low"|"medium"|"high", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" (optional), "time": "HH:MM" 24h start, "endTime": "HH:MM" 24h end (optional), "theme": theme NAME this cue/session belongs to (optional), "themeKind": "project"|"standing"|"weekly" (themes only), "notes": string (optional) }
+There are three kinds of item. SESSION: a block of time (date + usually times); the default. THEME: a container of work (a project, standing area, or recurring set) with NO time. CUE: a piece of work that lives in a Theme and is NOT yet scheduled — set itemType "cue", give it a "theme" name, and give it NO date and NO time (the user schedules it later).
+When the user pastes a schedule with times, those are SESSIONS (the existing behavior — unchanged). Only emit a CUE when the user is listing work to do without a specific time, or explicitly asks to add cues to a theme. Only emit a THEME when the user is clearly creating a new area of work; to add cues to an existing theme, emit cues with that theme's exact name in "theme".
+Keep the "title" short and scannable (a few words). Put any agenda, attendee list, sub-items, links, or extra detail in "notes", NEVER in the title. For example, a meeting whose agenda covers several topics should have a short title like "Mark/Nadir Touchpoint" and the agenda in notes.
+
+ALWAYS return a JSON array whenever the user asks to create anything — a session, a theme, or cues — even a single item. Do not reply with only prose when the user is creating items.
+Worked example — user says "create a new project theme called Website Refresh with cues Audit pages and Rewrite copy":
+[
+  { "itemType": "theme", "title": "Website Refresh", "themeKind": "project", "role": "${roles[0] ? roles[0].id : 'work'}" },
+  { "itemType": "cue", "title": "Audit pages", "theme": "Website Refresh", "role": "${roles[0] ? roles[0].id : 'work'}" },
+  { "itemType": "cue", "title": "Rewrite copy", "theme": "Website Refresh", "role": "${roles[0] ? roles[0].id : 'work'}" }
+]
+Note the theme comes first, each cue names the same theme, and cues have no date or time.`;
 
   async function send() {
     if (!input.trim() || loading) return;
@@ -297,7 +315,7 @@ Keep the "title" short and scannable (a few words). Put any agenda, attendee lis
             {loading && <div className="ai-msg ai-msg-assistant ai-loading">Thinking…</div>}
             {draftTasks && (
               <div className="ai-drafts">
-                <div className="ai-drafts-head">{draftTasks.length} task{draftTasks.length>1?'s':''} ready</div>
+                <div className="ai-drafts-head">{draftTasks.length} item{draftTasks.length>1?'s':''} ready</div>
                 {draftTasks.map((t, i) => (
                   <div key={i} className="ai-draft-item">
                     <strong>{t.title}</strong>

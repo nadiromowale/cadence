@@ -1665,22 +1665,80 @@ function App() {
 
   function addTasksFromAI(drafts) {
     const valid = roles.map(r => r.id);
-    const newOnes = drafts.map(d => ({
-      id: Date.now() + Math.floor(Math.random()*10000),
-      title: d.title || 'Untitled',
-      role: valid.includes(d.role) ? d.role : (selectedRole === 'all' ? roles[0].id : selectedRole),
-      priority: ['low','medium','high'].includes(d.priority) ? d.priority : 'medium',
-      startDate: d.startDate || fmtInput(currentWeekStart),
-      endDate: d.endDate || d.startDate || fmtInput(currentWeekStart),
-      time: d.time || '',
-      endTime: d.endTime || '',
-      duration: '',
-      notes: d.notes || '',
-      links: '',
-      tags: [],
-      reminder: ''
-    }));
-    setTasks(prev => [...prev, ...newOnes]);
+    const fallbackRole = () => (selectedRole === 'all' ? roles[0].id : selectedRole);
+    const resolveRole = r => (valid.includes(r) ? r : fallbackRole());
+    let idSeed = Date.now();
+    const nextId = () => (idSeed += 1 + Math.floor(Math.random()*50));
+
+    // Work against a local copy so theme-name lookups can see themes created in THIS batch.
+    const working = [...tasks];
+    const isThemeKind = t => t.kind === 'weekly' || t.kind === 'project' || t.kind === 'standing';
+    // Find an existing theme by (case-insensitive) name, or one already created this batch.
+    const findThemeByName = name => {
+      const n = (name || '').trim().toLowerCase();
+      if (!n) return null;
+      return working.find(t => isThemeKind(t) && (t.title || '').trim().toLowerCase() === n) || null;
+    };
+    const additions = [];
+
+    // First pass: create any explicit new THEMES so cues/sessions can attach to them.
+    drafts.filter(d => d.itemType === 'theme').forEach(d => {
+      if (findThemeByName(d.title)) return; // don't duplicate an existing theme
+      const theme = {
+        id: nextId(), title: d.title || 'Untitled', role: resolveRole(d.role),
+        priority: ['low','medium','high'].includes(d.priority) ? d.priority : 'medium',
+        time: '', endTime: '', allDay: false,
+        startDate: fmtInput(currentWeekStart), endDate: '',
+        themeIds: [], parentId: null, notes: d.notes || '', links: [], tags: [], done: false,
+        kind: ['project','standing','weekly'].includes(d.themeKind) ? d.themeKind : 'weekly',
+        themeWeek: fmtInput(currentWeekStart), themeEnd: '',
+      };
+      working.push(theme); additions.push(theme);
+    });
+
+    // Second pass: cues and sessions.
+    let cueOrderSeed = {};
+    drafts.filter(d => d.itemType !== 'theme').forEach(d => {
+      const wantsTheme = (d.theme || '').trim();
+      let themeObj = wantsTheme ? findThemeByName(wantsTheme) : null;
+      // If a theme name was given but doesn't exist, create it (weekly) so the cue has a home.
+      if (wantsTheme && !themeObj) {
+        themeObj = {
+          id: nextId(), title: wantsTheme, role: resolveRole(d.role), priority: 'medium',
+          time: '', endTime: '', allDay: false,
+          startDate: fmtInput(currentWeekStart), endDate: '',
+          themeIds: [], parentId: null, notes: '', links: [], tags: [], done: false,
+          kind: 'weekly', themeWeek: fmtInput(currentWeekStart), themeEnd: '',
+        };
+        working.push(themeObj); additions.push(themeObj);
+      }
+      const isCue = d.itemType === 'cue' || (!d.time && !d.startDate && !!themeObj);
+      if (isCue) {
+        const key = themeObj ? themeObj.id : 'none';
+        cueOrderSeed[key] = (cueOrderSeed[key] || 0) + 1;
+        additions.push({
+          id: nextId(), title: d.title || 'Untitled', role: resolveRole(d.role),
+          priority: ['low','medium','high'].includes(d.priority) ? d.priority : 'medium',
+          time: '', endTime: '', allDay: false, startDate: '', endDate: '',
+          themeIds: themeObj ? [themeObj.id] : [], parentId: null,
+          notes: d.notes || '', links: [], tags: [], done: false,
+          isCue: true, cueOrder: cueOrderSeed[key],
+        });
+      } else {
+        // a session (timed or dated); attach to theme if one was named
+        additions.push({
+          id: nextId(), title: d.title || 'Untitled', role: resolveRole(d.role),
+          priority: ['low','medium','high'].includes(d.priority) ? d.priority : 'medium',
+          startDate: d.startDate || fmtInput(currentWeekStart),
+          endDate: d.endDate || d.startDate || fmtInput(currentWeekStart),
+          time: d.time || '', endTime: d.endTime || '', duration: '',
+          themeIds: themeObj ? [themeObj.id] : [],
+          notes: d.notes || '', links: '', tags: [], reminder: '',
+        });
+      }
+    });
+
+    setTasks(prev => [...prev, ...additions]);
   }
 
   const roleColor = (id) => (roles.find(r => r.id === id) || {}).color || '#999';
@@ -5299,18 +5357,6 @@ function App() {
                     onClick={() => { if (cueDraft.trim()) { addCueToTheme(viewingThemeId, cueDraft.trim()); setCueDraft(''); } }}>Add</button>
                 </div>
 
-                <div className="theme-roster-head">
-                  <span className="roster-head-label">Sessions <span className="roster-count">{sessions.length + unscheduledForTheme(viewingThemeId).length}</span></span>
-                  <button className="btn-secondary sm" onClick={() => {
-                    setViewingThemeId(null);
-                    setEditingId(null);
-                    // One "Add session". No time by default — it's an unscheduled session
-                    // until you give it a time. Time and duration are optional in the editor.
-                    setFormData({ ...blankForm(theme.role), startDate: '', endDate: '', themeWeek: '', time: '', endTime: '', duration: '', draftKind: 'session', kind: undefined, themeIds: [theme.id] });
-                    setShowModal(true);
-                  }}>+ Session</button>
-                </div>
-
                 {sessions.length === 0 && unscheduledForTheme(viewingThemeId).length === 0 && <div className="theme-empty">No sessions yet. Add a cue above, or schedule one directly.</div>}
 
                 {(() => {
@@ -5340,6 +5386,20 @@ function App() {
                     </>
                   );
                 })()}
+
+                <div className="theme-roster-head">
+                  <span className="roster-head-label">Sessions <span className="roster-count">{sessions.length}</span></span>
+                  <button className="btn-secondary sm" onClick={() => {
+                    setViewingThemeId(null);
+                    setEditingId(null);
+                    // One "Add session". No time by default — it's an unscheduled session
+                    // until you give it a time. Time and duration are optional in the editor.
+                    setFormData({ ...blankForm(theme.role), startDate: '', endDate: '', themeWeek: '', time: '', endTime: '', duration: '', draftKind: 'session', kind: undefined, themeIds: [theme.id] });
+                    setShowModal(true);
+                  }}>+ Session</button>
+                </div>
+
+                {sessions.length === 0 && <div className="theme-empty">No sessions scheduled yet. Book a time on a cue above, or add one directly.</div>}
 
                 {upcoming.length > 0 && <div className="theme-group-label">Upcoming</div>}
                 {upcoming.map(s => (
