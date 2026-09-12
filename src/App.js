@@ -1441,6 +1441,18 @@ function App() {
     );
   }
 
+  // A short "N cues · M sessions" summary for a theme, counting the two separately (a cue is
+  // unscheduled work; a session is a booked block). Omits a zero side; returns '' when both are
+  // zero so callers can show their own "nothing yet" text.
+  function themeCountSummary(themeId) {
+    const cues = unscheduledForTheme(themeId).length;
+    const sessions = sessionsForTheme(themeId).length;
+    const parts = [];
+    if (cues > 0) parts.push(`${cues} cue${cues>1?'s':''}`);
+    if (sessions > 0) parts.push(`${sessions} session${sessions>1?'s':''}`);
+    return parts.join(' · ');
+  }
+
   function unscheduledForTheme(themeId) {
     const treeIds = subtreeItemIds(themeId);
     const theme = tasks.find(t => t.id === themeId);
@@ -3291,7 +3303,7 @@ function App() {
                 <span className="priority-title">{theme.priority==='high'?'▲ ':''}{theme.title}</span>
                 <div className="priority-meta">
                   <span className={`tl-state tl-state-${state}`}>{state}</span>
-                  {sessionsForTheme(theme.id).length > 0 && <span className="theme-session-count"> · {sessionsForTheme(theme.id).length} session{sessionsForTheme(theme.id).length>1?'s':''}</span>}
+                  {themeCountSummary(theme.id) && <span className="theme-session-count"> · {themeCountSummary(theme.id)}</span>}
                 </div>
               </div>
             ));
@@ -3602,7 +3614,6 @@ function App() {
                       <div className="folder-empty">Nothing here yet.</div>
                     )}
                     {themes.map(({item: t, variants}) => {
-                      const n = sessionsForTheme(t.id).length + unscheduledForTheme(t.id).length;
                       const rep = describeRepeat(t);
                       return (
                         <div key={t.id} className="theme-row" onClick={() => { setReturnToDrawer('roles'); setMobileDrawer(null); setViewingThemeId(t.id); }}>
@@ -3613,7 +3624,7 @@ function App() {
                               {t.title}
                             </div>
                             <div className="theme-sub">
-                              {rep ? rep : (n > 0 ? `${n} session${n>1?'s':''}` : 'no sessions yet')}
+                              {rep ? rep : (themeCountSummary(t.id) || 'nothing yet')}
                               {variants > 0 && <span className="row-variants"> · +{variants} moved/copy</span>}
                             </div>
                           </div>
@@ -4080,15 +4091,13 @@ function App() {
                           ? 'ongoing'
                           : `week of ${new Date((t.themeWeek||t.startDate)+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}`}
                       {(() => {
-                        const sess = sessionsForTheme(t.id);
-                        const unsched = unscheduledForTheme(t.id);
-                        const total = sess.length + unsched.length;
-                        if (total === 0) return null;
+                        const summary = themeCountSummary(t.id);
+                        if (!summary) return null;
                         return (
                           <span className="theme-session-count clickable"
                             onMouseEnter={(e)=>{ const r = e.currentTarget.getBoundingClientRect(); openSessionPanel(t.id, r); }}
                             onMouseLeave={scheduleClosePanel}>
-                            {' · '}{total} session{total>1?'s':''} <span className="tsc-caret">▸</span>
+                            {' · '}{summary} <span className="tsc-caret">▸</span>
                           </span>
                         );
                       })()}
@@ -5816,8 +5825,7 @@ function App() {
                     <span className="priority-title">{t.title}</span>
                     <div className="priority-meta">
                       {(() => {
-                        const s = sessionsForTheme(t.id).length + unscheduledForTheme(t.id).length;
-                        return s > 0 ? `${s} session${s>1?'s':''}` : 'no sessions yet';
+                        return themeCountSummary(t.id) || 'nothing yet';
                       })()}
                     </div>
                   </div>
