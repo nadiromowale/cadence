@@ -174,6 +174,82 @@ function toMinutes(hhmm) {
   return h * 60 + (m || 0);
 }
 
+// --- Cross-day rendering helper (round 1) -----------------------------------
+// Given a TIMED session and a target day (YYYY-MM-DD), return the portion of the
+// session that falls on that day, or null if it doesn't touch that day. The portion is
+// expressed in minutes-from-midnight of the target day:
+//   { start, end, continuesAfter, continuedBefore }
+//   start/end: 0..1440 (end may equal 1440 for "runs to end of day")
+//   continuesAfter:  true if the session extends past this day (draw a "continues →" cap)
+//   continuedBefore: true if the session began before this day (draw a "← continued" cap)
+//
+// A session's true span is [startDate + time] .. [endDateEffective + endTimeEffective]:
+//   - endDate later than startDate → an explicit multi-day span.
+//   - no endDate but endTime <= startTime → the implicit single-midnight crossing (unchanged).
+//   - otherwise → a normal single-day session.
+// This is a pure function of the session's own fields; recurrence is handled by the caller
+// deciding WHICH dates to ask about (occursOn), then asking about the occurrence date and,
+// for a crossing, the day after. dayAddStr adds days to a YYYY-MM-DD string with no TZ shift.
+function dayAddStr(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function sessionPortionOnDay(session, dayStr) {
+  if (!session || !session.startDate) return null;
+  const startTime = session.time;
+  if (!startTime) return null; // all-day / untimed handled elsewhere, not here
+  const startMin = toMinutes(startTime);
+  if (startMin == null) return null;
+
+  // Resolve the true end date + end-minute of the span.
+  let endDate = session.startDate;
+  let endMin;
+  const hasEndDate = session.endDate && session.endDate > session.startDate;
+  if (session.endTime) {
+    endMin = toMinutes(session.endTime);
+    if (hasEndDate) {
+      endDate = session.endDate; // explicit multi-day span; endMin is on endDate
+    } else if (endMin <= startMin) {
+      endDate = dayAddStr(session.startDate, 1); // implicit single-midnight crossing
+    }
+    // else: normal same-day session (endMin > startMin, no endDate)
+  } else if (session.duration) {
+    const total = startMin + parseInt(session.duration, 10);
+    const daysForward = Math.floor(total / 1440);
+    endMin = total % 1440;
+    if (daysForward > 0) endDate = dayAddStr(session.startDate, daysForward);
+    else endMin = total; // stays within the day
+  } else {
+    // default 1 hour
+    endMin = startMin + 60;
+    if (endMin > 1440) { endDate = dayAddStr(session.startDate, 1); endMin -= 1440; }
+  }
+
+  // Now compute the portion on dayStr.
+  const isStartDay = dayStr === session.startDate;
+  const isEndDay = dayStr === endDate;
+  const isSingleDay = session.startDate === endDate;
+
+  if (isSingleDay) {
+    if (!isStartDay) return null;
+    return { start: startMin, end: Math.max(endMin, startMin + 1), continuesAfter: false, continuedBefore: false };
+  }
+  // Multi-day (spans at least one boundary): startDate .. endDate inclusive.
+  if (dayStr < session.startDate || dayStr > endDate) return null;
+  if (isStartDay) {
+    return { start: startMin, end: 1440, continuesAfter: true, continuedBefore: false };
+  }
+  if (isEndDay) {
+    return { start: 0, end: Math.max(endMin, 1), continuesAfter: false, continuedBefore: true };
+  }
+  // A full middle day of a 3+ day span.
+  return { start: 0, end: 1440, continuesAfter: true, continuedBefore: true };
+}
+// ---------------------------------------------------------------------------
+
+
 // Given a day's timed events, assign each a layer for overlap display.
 // Layered model (Google-style): each event keeps most of the width but is
 // offset and stacked by depth so you can read each one.
@@ -1566,6 +1642,17 @@ function App() {
         hits.push({ t, label: `"${t.title}" (${ds}${de} \u00b7 ${fmtTime(t.time,use24h)}\u2013${fmtTime(minToHHMM(te),use24h)})` });
       }
     });
+    // Sessions that began the PREVIOUS day and cross past midnight into this day: their tail
+    // (00:00 -> endTime) can occupy an early-morning slot even though they don't "occur" today.
+    const prevStrCC = fmtInput(new Date(new Date(dateStr+'T00:00:00').getTime() - 86400000));
+    tasks.filter(t => t.time && !t.isBackground && !t.allDay && t.id !== excludeId && !occursOn(t, dateStr) && occursOn(t, prevStrCC)).forEach(t => {
+      const p = sessionPortionOnDay({ ...t, startDate: prevStrCC }, dateStr);
+      if (!p || !p.continuedBefore) return;
+      if (startMin < p.end && p.start < end) {
+        const ds = new Date(t.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
+        hits.push({ t, label: `"${t.title}" (from ${ds} \u00b7 runs to ${fmtTime(t.endTime,use24h)})` });
+      }
+    });
     // All-day foreground events claim the whole day
     tasks.filter(t => t.allDay && !t.isBackground && occursOn(t, dateStr) && t.id !== excludeId).forEach(t => {
       const ds = new Date(t.startDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
@@ -1942,7 +2029,7 @@ function App() {
     else if (data.duration) end = start + parseInt(data.duration, 10);
     else end = start + 60;
     if (end <= start) end = 24 * 60; // guard: malformed/wrapped end → treat as rest of day
-    return tasks.filter(t => {
+    const sameDay = tasks.filter(t => {
       if (t.id === data.id) return false;
       if (t.isBackground) return false; // backdrop events never flag conflicts
       // Does this task ACTUALLY occur on the same date? occursOn respects recurrence
@@ -1959,6 +2046,16 @@ function App() {
       if (oe <= os) oe = 24 * 60; // guard: other session's end wraps/malformed → rest of day
       return start < oe && os < end; // overlap
     });
+    // Cross-in: a session from the PREVIOUS day whose after-midnight tail overlaps this slot.
+    const prevD = fmtInput(new Date(new Date(data.startDate+'T00:00:00').getTime() - 86400000));
+    const crossIn = tasks.filter(t => {
+      if (t.id === data.id || t.isBackground || t.allDay || !t.time) return false;
+      if (occursOn(t, data.startDate)) return false; // already handled as same-day
+      if (!occursOn(t, prevD)) return false;
+      const p = sessionPortionOnDay({ ...t, startDate: prevD }, data.startDate);
+      return p && p.continuedBefore && start < p.end && p.start < end;
+    });
+    return [...sameDay, ...crossIn];
   }
 
   function buildTaskData() {
@@ -2842,10 +2939,24 @@ function App() {
           const isToday = dateStr === todayStr;
           // All-day / background claims for this day
           const claims = tasks.filter(t => t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr));
-          // Timed sessions for this day, in time order
-          const timed = tasks
+          // Timed sessions for this day, in time order. Includes cross-ins: a session that
+          // began the previous day and runs past midnight into this day shows here too, marked
+          // as continued, sorted to the top (its portion today starts at 00:00).
+          const prevStr = fmtInput(new Date(new Date(dateStr+'T00:00:00').getTime() - 86400000));
+          const occurringTimed = tasks
             .filter(t => t.time && !t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr))
-            .sort((a,b) => (a.time||'').localeCompare(b.time||''));
+            .map(t => ({ t, occDate: dateStr, continued: false }));
+          const crossInTimed = tasks
+            .filter(t => {
+              if (!t.time || t.allDay || !isRoleSelected(t.role) || !searchMatch(t)) return false;
+              if (occursOn(t, dateStr)) return false;
+              if (!occursOn(t, prevStr)) return false;
+              const p = sessionPortionOnDay({ ...t, startDate: prevStr }, dateStr);
+              return p && p.continuedBefore;
+            })
+            .map(t => ({ t, occDate: prevStr, continued: true }));
+          const timed = [...crossInTimed, ...occurringTimed]
+            .sort((a,b) => (a.continued === b.continued) ? (a.t.time||'').localeCompare(b.t.time||'') : (a.continued ? -1 : 1));
           const count = claims.length + timed.length;
           return (
             <div key={dateStr} className={`m-day${isToday ? ' m-day-today' : ''}`} data-today={isToday ? '1' : undefined}>
@@ -2862,20 +2973,22 @@ function App() {
                     <div className="m-claim-sub">{t.isBackground ? 'Background' : 'All day'} · {roleLabel(t.role)}</div>
                   </div>
                 ))}
-                {timed.map(t => {
-                  const past = t.done || isSessionPast(t, dateStr);
+                {timed.map(({t, occDate, continued}) => {
+                  const past = t.done || isSessionPast(t, occDate);
                   return (
-                    <div key={t.id + '-' + dateStr} className={`m-sess${past ? ' m-sess-done' : ''}${t.isBackground ? ' m-sess-bg' : ''}`}
+                    <div key={t.id + '-' + dateStr + (continued?'-tail':'')} className={`m-sess${past ? ' m-sess-done' : ''}${t.isBackground ? ' m-sess-bg' : ''}${continued ? ' m-sess-continued' : ''}`}
                       style={{'--role': roleColor(t.role)}}
-                      onClick={() => openSessionView(t, dateStr)}>
+                      onClick={() => openSessionView(t, occDate)}>
                       <div className="m-sess-time">
-                        {fmtTime(t.time, use24h)}
-                        {t.endTime && <><br/><span className="end">{fmtTime(t.endTime, use24h)}</span></>}
+                        {continued ? <span className="m-sess-cont">↞ 12:00a</span> : fmtTime(t.time, use24h)}
+                        {!continued && t.endTime && <><br/><span className="end">{fmtTime(t.endTime, use24h)}</span></>}
+                        {continued && t.endTime && <><br/><span className="end">{fmtTime(t.endTime, use24h)}</span></>}
                       </div>
                       <div className="m-sess-body">
                         <div className="m-sess-title">
                           <span className={`m-pri-dot m-pri-${t.priority||'medium'}`}></span>
                           {t.repeat && t.repeat.freq !== 'none' && <span className="m-sess-rep">🔁</span>}
+                          {continued && <span className="m-sess-cont-tag">continued </span>}
                           {t.done && '✓ '}{t.title}
                         </div>
                         {t.location && <div className="m-sess-loc">📍 {t.location}</div>}
@@ -2902,15 +3015,48 @@ function App() {
     const isToday = dateStr === fmtInput(new Date());
     const hours = Array.from({length: 24}, (_,i) => i);
 
+    const prevStr = fmtInput(new Date(d.getTime() - 86400000));
     const allDay = tasks.filter(t => t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr));
     const timed = tasks.filter(t => t.time && !t.allDay && isRoleSelected(t.role) && searchMatch(t) && occursOn(t, dateStr));
-    // Background sessions (camp, travel, out-of-office) sit BEHIND the day's real
-    // sessions, spanning full width with a sliver showing at the edges — they're a
-    // backdrop, not a competing block. So they're excluded from the overlap columns.
-    const bgSessions = timed.filter(t => t.isBackground);
-    const fgSessions = timed.filter(t => !t.isBackground);
-    // layoutDayEvents returns an OBJECT keyed by task id: { [id]: {col, cols, start, end} }
-    const layout = layoutDayEvents(fgSessions);
+    const crossInTimed = tasks.filter(t => {
+      if (!t.time || t.allDay || !isRoleSelected(t.role) || !searchMatch(t)) return false;
+      if (occursOn(t, dateStr)) return false;
+      if (!occursOn(t, prevStr)) return false;
+      const p = sessionPortionOnDay({ ...t, startDate: prevStr }, dateStr);
+      return p && p.continuedBefore;
+    });
+    // Build {t, p, occDate} portion items for this day.
+    const toItem = (t, occDate) => { const p = sessionPortionOnDay({ ...t, startDate: occDate }, dateStr); return p ? { t, p, occDate } : null; };
+    const timedItems = [
+      ...timed.map(t => toItem(t, dateStr)),
+      ...crossInTimed.map(t => toItem(t, prevStr)),
+    ].filter(Boolean);
+    // Background sessions sit BEHIND real sessions; excluded from overlap columns.
+    const bgItems = timedItems.filter(x => x.t.isBackground);
+    const fgItems = timedItems.filter(x => !x.t.isBackground);
+    // Per-cluster overlap-stacking (a lone session isn't squished by an unrelated overlap).
+    (() => {
+      const sorted = fgItems.slice().sort((a,b)=>a.p.start-b.p.start || b.p.end-a.p.end);
+      let cluster = [], clusterEnd = -1;
+      const flush = () => {
+        if (!cluster.length) return;
+        const colEnds = [];
+        cluster.forEach(item => {
+          let placed = false;
+          for (let c=0;c<colEnds.length;c++){ if (colEnds[c] <= item.p.start){ item._col=c; colEnds[c]=item.p.end; placed=true; break; } }
+          if (!placed){ item._col=colEnds.length; colEnds.push(item.p.end); }
+        });
+        const total = Math.max(1, colEnds.length);
+        cluster.forEach(i => { i._cols = total; });
+        cluster = []; clusterEnd = -1;
+      };
+      sorted.forEach(item => {
+        if (cluster.length && item.p.start >= clusterEnd) flush();
+        cluster.push(item);
+        clusterEnd = Math.max(clusterEnd, item.p.end);
+      });
+      flush();
+    })();
 
     const nowMin = new Date().getHours()*60 + new Date().getMinutes();
 
@@ -2949,51 +3095,44 @@ function App() {
             </div>
           ))}
 
-          {bgSessions.map(t => {
-            const start = toMinutes(t.time);
-            const end = t.endTime ? toMinutes(t.endTime) : start + 60;
-            const dur = Math.max(20, (end > start ? end : start + 60) - start);
-            const past = t.done || isSessionPast(t, dateStr);
+          {bgItems.map(({t, p, occDate}) => {
+            const dur = Math.max(20, p.end - p.start);
+            const past = t.done || isSessionPast(t, occDate);
             return (
-              <div key={t.id} className={`m-tl-clip bg${past ? ' done' : ''}`}
+              <div key={t.id + (p.continuedBefore?'-tail':'')} className={`m-tl-clip bg${past ? ' done' : ''}`}
                 style={{
                   '--role': roleColor(t.role),
-                  top: (start / 60) * HOUR_H,
+                  top: (p.start / 60) * HOUR_H,
                   height: Math.max(26, (dur / 60) * HOUR_H - 2),
                   left: 52, right: 4, width: 'auto',
                 }}
-                onClick={(e) => { e.stopPropagation(); openSessionView(t, dateStr); }}>
+                onClick={(e) => { e.stopPropagation(); openSessionView(t, occDate); }}>
                 <div className="m-tl-clip-title">{t.title}</div>
                 <div className="m-tl-clip-time">{fmtTime(t.time, use24h)}{t.endTime ? `–${fmtTime(t.endTime, use24h)}` : ''}</div>
               </div>
             );
           })}
 
-          {fgSessions.map(t => {
-            const info = layout[t.id] || {};
-            const start = info.start !== undefined ? info.start : toMinutes(t.time);
-            const end = info.end !== undefined ? info.end : start + 60;
-            const col = info.col || 0;
-            const cols = info.cols || 1;
-            const crossesMidnight = end > 1440;
-            const drawnEnd = Math.min(end, 1440);
-            const dur = Math.max(20, drawnEnd - start);
-            const past = t.done || isSessionPast(t, dateStr);
-            // Inset from the left so the background session peeks out behind, like desktop.
+          {fgItems.map(({t, p, occDate, _col, _cols}) => {
+            const dur = Math.max(20, p.end - p.start);
+            const col = _col || 0;
+            const cols = _cols || 1;
+            const past = t.done || isSessionPast(t, occDate);
             const widthPct = 100 / cols;
             return (
-              <div key={t.id} className={`m-tl-clip fg${past ? ' done' : ''}`}
+              <div key={t.id + (p.continuedBefore?'-tail':'')} className={`m-tl-clip fg${past ? ' done' : ''}${p.continuedBefore ? ' clip-continued-in' : ''}`}
                 style={{
                   '--role': roleColor(t.role),
-                  top: (start / 60) * HOUR_H,
+                  top: (p.start / 60) * HOUR_H,
                   height: Math.max(26, (dur / 60) * HOUR_H - 2),
                   left: `calc(66px + ${col * widthPct}%)`,
                   width: `calc(${widthPct}% - 22px)`,
                 }}
-                onClick={(e) => { e.stopPropagation(); openSessionView(t, dateStr); }}>
+                onClick={(e) => { e.stopPropagation(); openSessionView(t, occDate); }}>
+                {p.continuedBefore && <div className="event-continued">↑ continued</div>}
                 <div className="m-tl-clip-title">{t.done && '✓ '}{t.title}</div>
                 <div className="m-tl-clip-time">{fmtTime(t.time, use24h)}{t.endTime ? `–${fmtTime(t.endTime, use24h)}` : ''}</div>
-                {crossesMidnight && <div className="event-continues">↓ past midnight</div>}
+                {p.continuesAfter && <div className="event-continues">↓ continues</div>}
               </div>
             );
           })}
@@ -3056,19 +3195,27 @@ function App() {
     const hoursArr = Array.from({length:24}, (_,h)=>h);
 
     // sessions for this day, grouped by role
+    const prevDateStr = fmtInput(new Date(new Date(dateStr+'T00:00:00').getTime() - 86400000));
     const daySessions = tasks.filter(t => t.time && occursOn(t, dateStr) && searchMatch(t));
+    const dayCrossIns = tasks.filter(t => {
+      if (!t.time || !searchMatch(t)) return false;
+      if (occursOn(t, dateStr)) return false;
+      if (!occursOn(t, prevDateStr)) return false;
+      const p = sessionPortionOnDay({ ...t, startDate: prevDateStr }, dateStr);
+      return p && p.continuedBefore;
+    });
 
     // vertical "now" line position
     // now-line removed; isToday still drives the Today badge
 
     // compute overlap stacking within a lane
-    function layoutLane(sessions) {
-      const evs = sessions.map(s => {
-        const start = toMinutes(s.time);
-        let end = s.endTime ? toMinutes(s.endTime) : (s.duration ? start+parseInt(s.duration,10) : start+60);
-        if (end <= start) end += 1440; // crosses midnight → span to true length, not a sliver
-        return { s, start, end };
-      }).sort((a,b)=>a.start-b.start);
+    function layoutLane(items) {
+      // items: [{ s, occDate }]. Compute each session's PORTION on the viewed day.
+      const evs = items.map(({ s, occDate }) => {
+        const p = sessionPortionOnDay({ ...s, startDate: occDate }, dateStr);
+        if (!p) return null;
+        return { s, start: p.start, end: Math.max(p.end, p.start + 1), continuesAfter: p.continuesAfter, continuedBefore: p.continuedBefore };
+      }).filter(Boolean).sort((a,b)=>a.start-b.start);
       // assign rows so overlapping sessions stack
       const rows = [];
       evs.forEach(ev => {
@@ -3131,8 +3278,11 @@ function App() {
               const muted = mutedRoles.includes(role.id);
               const soloedAway = soloRole && soloRole !== role.id;
               const dimmed = muted || soloedAway;
-              const laneSessions = dimmed ? [] : daySessions.filter(s => s.role === role.id);
-              const { evs, rowCount } = layoutLane(laneSessions);
+              const laneItems = dimmed ? [] : [
+                ...daySessions.filter(s => s.role === role.id).map(s => ({ s, occDate: dateStr })),
+                ...dayCrossIns.filter(s => s.role === role.id).map(s => ({ s, occDate: prevDateStr })),
+              ];
+              const { evs, rowCount } = layoutLane(laneItems);
               const laneHeight = rowCount * (LANE_H - 12) + 12;
               const armed = armedRole === role.id;
               return (
@@ -3240,25 +3390,26 @@ function App() {
                     {/* now-line removed per preference */}
                     {dimmed && <div className="lane-muted-tag">{muted ? 'muted' : 'soloed out'}</div>}
                     {/* clips */}
-                    {evs.map(({s, start, end, row}) => {
+                    {evs.map(({s, start, end, row, continuesAfter, continuedBefore}) => {
                       const left = (start/60)*HOUR_W;
                       const width = Math.max(40, ((end-start)/60)*HOUR_W - 2);
                       const top = row*(LANE_H-12) + 4;
+                      const anchorDate = continuedBefore ? prevDateStr : dateStr;
                       return (
-                        <div key={s.id} className={`clip${(s.done || isSessionPast(s, dateStr)) ? ' done' : ''}${s.isBackground?' bg':''}`}
+                        <div key={s.id + (continuedBefore?'-tail':'')} className={`clip${(s.done || isSessionPast(s, anchorDate)) ? ' done' : ''}${s.isBackground?' bg':''}${continuedBefore?' clip-continued-in':''}`}
                           style={{ left, width, top, height: LANE_H-20,
                             '--role': role.color,
-                            borderLeft: `4px solid ${role.color}`,
+                            borderLeft: continuedBefore ? `4px dashed ${role.color}` : `4px solid ${role.color}`,
                             background: s.isBackground ? undefined : `linear-gradient(to bottom, color-mix(in oklab, ${role.color} 32%, #fff), color-mix(in oklab, ${role.color} 20%, #fff))` }}
-                          draggable
-                          onDragStart={(e)=>{ setHoverTip(null); handleDragStart(e,s,dateStr); }}
+                          draggable={!continuedBefore}
+                          onDragStart={(e)=>{ if (continuedBefore) { e.preventDefault(); return; } setHoverTip(null); handleDragStart(e,s,anchorDate); }}
                           onMouseDown={()=> setHoverTip(null)}
-                          onClick={(e)=>{ e.stopPropagation(); setHoverTip(null); openSessionView(s, s.startDate); }}
+                          onClick={(e)=>{ e.stopPropagation(); setHoverTip(null); openSessionView(s, anchorDate); }}
                           
                           onMouseMove={(e)=> setHoverTip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
                           onMouseLeave={()=> setHoverTip(null)}>
-                          <div className="clip-title">{s.priority==='high'?<span className="ev-pr">▲ </span>:''}{s.repeat&&s.repeat.freq!=='none'?'🔁 ':''}{s.done?'✓ ':''}{s.title}</div>
-                          <div className="clip-time">{fmtTime(s.time,use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}</div>
+                          <div className="clip-title">{continuedBefore?'↞ ':''}{s.priority==='high'?<span className="ev-pr">▲ </span>:''}{s.repeat&&s.repeat.freq!=='none'?'🔁 ':''}{s.done?'✓ ':''}{s.title}</div>
+                          <div className="clip-time">{fmtTime(s.time,use24h)}{s.endTime?`–${fmtTime(s.endTime,use24h)}`:''}{continuesAfter?' ↠':''}</div>
                         </div>
                       );
                     })}
@@ -3871,14 +4022,66 @@ function App() {
                 {[0,1,2,3,4,5,6].map(dayIndex => {
                   const d=new Date(currentWeekStart); d.setDate(d.getDate()+dayIndex);
                   const dateStr=fmtInput(d);
-                  // all timed events on this day
-                  const allDay = tasks.filter(t => {
+                  const prevStr=fmtInput(new Date(d.getTime()-86400000));
+                  // Timed events touching this day: ones that OCCUR today, plus ones that began
+                  // the day before and CROSS into today (their after-midnight / span tail).
+                  const occursToday = tasks.filter(t => {
                     if (!isRoleSelected(t.role) || !t.time || !searchMatch(t)) return false;
                     return occursOn(t, dateStr);
                   });
-                  const bgEvents = allDay.filter(t => t.isBackground);
-                  const fgEvents = allDay.filter(t => !t.isBackground);
-                  const layout = layoutDayEvents(fgEvents);
+                  const crossIns = tasks.filter(t => {
+                    if (!isRoleSelected(t.role) || !t.time || !searchMatch(t)) return false;
+                    if (occursOn(t, dateStr)) return false; // already counted as occurring today
+                    // Did it occur yesterday (or start earlier) AND extend into today?
+                    if (!occursOn(t, prevStr)) return false;
+                    const p = sessionPortionOnDay({ ...t, startDate: prevStr }, dateStr);
+                    return p && p.continuedBefore;
+                  });
+                  // Attach the portion for THIS day to each event (anchored to the date it occurs on).
+                  const withPortion = (t, occDate) => {
+                    const p = sessionPortionOnDay({ ...t, startDate: occDate }, dateStr);
+                    return p ? { t, p } : null;
+                  };
+                  const allDayPortions = [
+                    ...occursToday.map(t => withPortion(t, dateStr)),
+                    ...crossIns.map(t => withPortion(t, prevStr)),
+                  ].filter(Boolean);
+                  const bgPortions = allDayPortions.filter(x => x.t.isBackground);
+                  const fgPortions = allDayPortions.filter(x => !x.t.isBackground);
+                  // Background render is still the old path (round 4 will port it); give it the
+                  // variables it expects. bgEvents = background sessions occurring today.
+                  const bgEvents = occursToday.filter(t => t.isBackground);
+                  // Lightweight overlap-stacking on the day-portions (greedy columns).
+                  const layoutPortions = (items) => {
+                    const sorted = items.slice().sort((a,b) => a.p.start - b.p.start || b.p.end - a.p.end);
+                    // Break into clusters of mutually-overlapping portions; column count is
+                    // per-cluster so a lone 2pm session isn't squished by an unrelated 12am overlap.
+                    let cluster = [];
+                    let clusterEnd = -1;
+                    const flush = () => {
+                      if (!cluster.length) return;
+                      const colEnds = [];
+                      cluster.forEach(item => {
+                        let placed = false;
+                        for (let c = 0; c < colEnds.length; c++) {
+                          if (colEnds[c] <= item.p.start) { item._col = c; colEnds[c] = item.p.end; placed = true; break; }
+                        }
+                        if (!placed) { item._col = colEnds.length; colEnds.push(item.p.end); }
+                      });
+                      const total = Math.max(1, colEnds.length);
+                      cluster.forEach(i => { i._cols = total; });
+                      cluster = [];
+                      clusterEnd = -1;
+                    };
+                    sorted.forEach(item => {
+                      if (cluster.length && item.p.start >= clusterEnd) flush();
+                      cluster.push(item);
+                      clusterEnd = Math.max(clusterEnd, item.p.end);
+                    });
+                    flush();
+                    return sorted;
+                  };
+                  const fgLaidOut = layoutPortions(fgPortions);
                   return (
                     <div key={dateStr} className="day-col"
                       onDragOver={(e) => e.preventDefault()}
@@ -3969,25 +4172,21 @@ function App() {
                           return [bs, be];
                         });
                         const BG_INSET = 12; // px the fg shifts right to reveal the bg stripe
-                        return fgEvents.map(t => {
-                          const lay = layout[t.id];
-                          if (!lay) return null;
-                          const top = (lay.start / 60) * HOUR_PX;
-                          // A session crossing midnight has lay.end > 1440. Until true cross-day
-                          // rendering exists (see roadmap: multi-day sessions), clamp the drawn
-                          // block to end-of-day so it can't stretch the Score's layout, and flag
-                          // it so we can show a "continues" cap instead of silently truncating.
-                          const crossesMidnight = lay.end > 1440;
-                          const drawnEnd = Math.min(lay.end, 1440);
-                          const height = Math.max(18, ((drawnEnd - lay.start) / 60) * HOUR_PX - 2);
-                          const cols = lay.cols || 1;
+                        return fgLaidOut.map(({ t, p, _col, _cols }) => {
+                          const top = (p.start / 60) * HOUR_PX;
+                          const height = Math.max(18, ((p.end - p.start) / 60) * HOUR_PX - 2);
+                          const cols = _cols || 1;
                           const widthPct = 100 / cols;
-                          const leftPct = lay.col * widthPct;
-                          // does a background session overlap this event's time?
-                          const overlapsBg = bgRanges.some(([bs,be]) => lay.start < be && bs < lay.end);
-                          const inset = (lay.col === 0 && overlapsBg) ? BG_INSET : 0;
+                          const leftPct = (_col || 0) * widthPct;
+                          // does a background session overlap this portion's time?
+                          const overlapsBg = bgRanges.some(([bs,be]) => p.start < be && bs < p.end);
+                          const inset = ((_col || 0) === 0 && overlapsBg) ? BG_INSET : 0;
+                          // The date this session actually STARTS on (for click→open at the right
+                          // occurrence): its own start day if it occurs today, else the day before.
+                          const anchorDate = p.continuedBefore ? prevStr : dateStr;
+                          const keySuffix = p.continuedBefore ? '-tail' : '';
                           return (
-                            <div key={t.id} className={`event${(t.done || isSessionPast(t, dateStr)) ? ' event-done' : ''}`}
+                            <div key={t.id + keySuffix} className={`event${(t.done || isSessionPast(t, anchorDate)) ? ' event-done' : ''}${p.continuedBefore ? ' event-continued-in' : ''}`}
                               style={{
                                 top: top + 'px',
                                 height: height + 'px',
@@ -3997,8 +4196,8 @@ function App() {
                                 borderLeft: `4px solid ${roleColor(t.role)}`,
                                 background: `color-mix(in oklab, ${roleColor(t.role)} 20%, #fff)`
                               }}
-                              draggable
-                              onDragStart={(e) => { setHoverTip(null); handleDragStart(e, t, dateStr); }}
+                              draggable={!p.continuedBefore}
+                              onDragStart={(e) => { if (p.continuedBefore) { e.preventDefault(); return; } setHoverTip(null); handleDragStart(e, t, anchorDate); }}
                               onDragOver={(e) => e.preventDefault()}
                               onDrop={(e) => {
                                 e.preventDefault(); e.stopPropagation();
@@ -4010,15 +4209,16 @@ function App() {
                                 handleDrop(e, dateStr, Math.floor(snapped/60), snapped);
                               }}
                               onMouseDown={() => setHoverTip(null)}
-                              onClick={(e) => { e.stopPropagation(); setHoverTip(null); openSessionView(t, dateStr); }}
+                              onClick={(e) => { e.stopPropagation(); setHoverTip(null); openSessionView(t, anchorDate); }}
                               onMouseEnter={(e)=> { if (cols > 1) setHoverTip({ x: e.clientX, y: e.clientY, title: t.title, time: `${fmtTime(t.time,use24h)}${t.endTime?`–${fmtTime(t.endTime,use24h)}`:''}`, notes: t.notes, color: roleColor(t.role) }); }}
                               onMouseMove={(e)=> { if (cols > 1) setHoverTip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev); }}
                               onMouseLeave={()=> setHoverTip(null)}
-                              onContextMenu={(e) => { e.preventDefault(); if (t.repeat && t.repeat.freq!=='none') { if (window.confirm(`Skip “${t.title}” on ${dateStr}? (keeps the rest of the series)`)) skipOccurrence(t.id, dateStr); } }}>
+                              onContextMenu={(e) => { e.preventDefault(); if (t.repeat && t.repeat.freq!=='none') { if (window.confirm(`Skip “${t.title}” on ${anchorDate}? (keeps the rest of the series)`)) skipOccurrence(t.id, anchorDate); } }}>
+                              {p.continuedBefore && <div className="event-continued" title={`Continued from ${fmtTime(t.time, use24h)} the previous day`}>↑ continued</div>}
                               <div className="event-title">{t.priority==='high'?<span className="ev-pr">▲ </span>:''}{t.repeat && t.repeat.freq!=='none' ? '🔁 ' : ''}{t.done?'✓ ':''}{t.title}</div>
                             {(() => { const ids = t.themeIds || (t.themeId ? [t.themeId] : []); return ids.length > 0 ? <div className="event-themes">{ids.map(id => { const th = getThemes().find(x=>x.id===id); return th ? <span key={id} className="event-theme-dot" style={{background: roleColor(th.role)}} title={th.title}></span> : null; })}</div> : null; })()}
                             {(t.endTime || t.duration) && <div className="event-time">{fmtTime(t.time, use24h)}{t.endTime?`–${fmtTime(t.endTime, use24h)}`:''}</div>}
-                            {crossesMidnight && <div className="event-continues" title={`Continues to ${fmtTime(t.endTime, use24h)} next day`}>↓ continues past midnight</div>}
+                            {p.continuesAfter && <div className="event-continues" title={`Continues to ${fmtTime(t.endTime, use24h)}${p.continuedBefore ? '' : ' next day'}`}>↓ continues</div>}
                           </div>
                         );
                         });
