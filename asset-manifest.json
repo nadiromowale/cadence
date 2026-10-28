@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/cadence/static/css/main.b210a5c7.css",
-    "main.js": "/cadence/static/js/main.8ee15662.js",
+    "main.css": "/cadence/static/css/main.1efb546f.css",
+    "main.js": "/cadence/static/js/main.686b9a6c.js",
     "index.html": "/cadence/index.html",
-    "main.b210a5c7.css.map": "/cadence/static/css/main.b210a5c7.css.map",
-    "main.8ee15662.js.map": "/cadence/static/js/main.8ee15662.js.map"
+    "main.1efb546f.css.map": "/cadence/static/css/main.1efb546f.css.map",
+    "main.686b9a6c.js.map": "/cadence/static/js/main.686b9a6c.js.map"
   },
   "entrypoints": [
-    "static/css/main.b210a5c7.css",
-    "static/js/main.8ee15662.js"
+    "static/css/main.1efb546f.css",
+    "static/js/main.686b9a6c.js"
   ]
 }
